@@ -303,6 +303,13 @@ class EnableBankingProvider(BankProvider):
             raise SessionExpiredError(
                 f"Enable Banking returned {resp.status_code} for {path}"
             )
+        if resp.status_code >= 400:
+            # Kept out of the exception text, which the connections API
+            # returns to clients; still available when debugging a failure.
+            logger.debug(
+                "Enable Banking %s %s → %s: %s",
+                method, path, resp.status_code, resp.text[:300],
+            )
         if resp.status_code == 429:
             # The bank (ASPSP) is throttling us — transient, not a broken
             # connection. Surface a distinct type so sync can skip-and-retry

@@ -24,6 +24,7 @@ def provider_encryption_key(monkeypatch, request):
 
 
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("ignore::jwt.warnings.InsecureKeyLengthWarning")
 @pytest.mark.parametrize(
     "provider_encryption_key",
     ["change-me-in-production", "dev-secret-change-in-production", "short-custom-key"],
@@ -56,6 +57,7 @@ async def test_empty_master_key_cannot_store_secrets(session, clean_db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("ignore::jwt.warnings.InsecureKeyLengthWarning")
 @pytest.mark.parametrize("provider_encryption_key", ["change-me-in-production"], indirect=True)
 async def test_default_key_allows_reset_and_simplefin_toggle(client, admin_auth_headers, session):
     session.add(AppSetting(key="pluggy_client_secret", value="old-ciphertext"))

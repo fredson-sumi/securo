@@ -1,3 +1,5 @@
+from importlib import import_module
+
 from app.core.config import Settings
 from app.providers.base import (
     AccountData,
@@ -12,6 +14,7 @@ from app.providers.base import (
     SessionExpiredError,
     TransactionData,
 )
+from app.providers.credentials import is_configured
 
 # Registry of available providers.
 _PROVIDERS: dict[str, type[BankProvider]] = {}
@@ -57,14 +60,7 @@ def get_provider(name: str, settings: Settings | None = None) -> BankProvider:
     if not provider_class:
         available = ", ".join(available_providers) or "(none)"
         raise ValueError(f"Unknown provider: {name}. Available: {available}")
-    return provider_class(settings=settings) if settings is not None else provider_class()
-
-
-def list_providers() -> list[dict[str, str]]:
-    """Return info about all registered providers."""
-    return [
-        {"name": name, "flow_type": cls().flow_type} for name, cls in _available_providers().items()
-    ]
+    return provider_class(settings=settings)
 
 
 def all_known_providers(settings: Settings | None = None) -> list[dict]:
@@ -73,30 +69,23 @@ def all_known_providers(settings: Settings | None = None) -> list[dict]:
     return [{**p, "configured": p["name"] in available} for p in KNOWN_PROVIDERS]
 
 
+# Providers enabled by instance settings, imported only once configured.
+_CREDENTIALED_PROVIDERS = {
+    "pluggy": ("app.providers.pluggy", "PluggyProvider"),
+    "enable_banking": ("app.providers.enable_banking", "EnableBankingProvider"),
+    "simplefin": ("app.providers.simplefin", "SimpleFinProvider"),
+}
+
+
 def _available_providers(settings: Settings | None = None) -> dict[str, type[BankProvider]]:
     """Derive availability without mutating process-wide registration."""
     from app.core.config import get_settings
 
     settings = settings or get_settings()
     providers = dict(_PROVIDERS)
-
-    if settings.pluggy_client_id and settings.pluggy_client_secret:
-        from app.providers.pluggy import PluggyProvider
-
-        providers["pluggy"] = PluggyProvider
-
-    from app.services.provider_settings import is_configured
-
-    if is_configured("enable_banking", settings):
-        from app.providers.enable_banking import EnableBankingProvider
-
-        providers["enable_banking"] = EnableBankingProvider
-
-    if settings.simplefin_enabled:
-        from app.providers.simplefin import SimpleFinProvider
-
-        providers["simplefin"] = SimpleFinProvider
-
+    for name, (module, class_name) in _CREDENTIALED_PROVIDERS.items():
+        if is_configured(name, settings):
+            providers[name] = getattr(import_module(module), class_name)
     return providers
 
 
@@ -136,7 +125,6 @@ __all__ = [
     "SessionExpiredError",
     "register_provider",
     "get_provider",
-    "list_providers",
     "all_known_providers",
     "get_storage_provider",
 ]
