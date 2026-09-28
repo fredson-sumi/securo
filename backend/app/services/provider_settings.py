@@ -1,7 +1,5 @@
 """Write-only instance credentials and uncached runtime resolution."""
 
-from pathlib import Path
-
 from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,15 +8,13 @@ from app.agents.services.crypto import decrypt, encrypt
 from app.core.config import Settings, get_settings
 from app.core.database import async_session_maker
 from app.models.app_settings import AppSetting
-
-PROVIDER_FIELDS = {
-    "openexchangerates": ("openexchangerates_app_id",),
-    "pluggy": ("pluggy_client_id", "pluggy_client_secret"),
-    "enable_banking": ("enable_banking_app_id", "enable_banking_private_key"),
-    "simplefin": ("simplefin_enabled",),
-}
-SETTING_FIELDS = {field for fields in PROVIDER_FIELDS.values() for field in fields}
-SECRET_FIELDS = SETTING_FIELDS - {"simplefin_enabled"}
+from app.providers.credentials import (
+    PROVIDER_FIELDS,
+    SECRET_FIELDS,
+    SETTING_FIELDS,
+    field_present,
+    is_configured,
+)
 
 
 def can_store_secrets() -> bool:
@@ -58,22 +54,6 @@ async def resolve_settings(session: AsyncSession | None = None) -> Settings:
     return _resolve(await _overrides(session))
 
 
-def _field_present(settings: Settings, key: str) -> bool:
-    if key == "enable_banking_private_key":
-        key_file = (settings.enable_banking_private_key_file or "").strip()
-        if key_file:
-            try:
-                with Path(key_file).open(encoding="utf-8") as private_key:
-                    return bool(private_key.read(16000).strip())
-            except (OSError, ValueError, UnicodeError):
-                return False
-    return bool(getattr(settings, key))
-
-
-def is_configured(provider: str, settings: Settings) -> bool:
-    return all(_field_present(settings, key) for key in PROVIDER_FIELDS[provider])
-
-
 async def provider_status(session: AsyncSession) -> list[dict]:
     overrides = await _overrides(session)
     settings = _resolve(overrides)
@@ -83,12 +63,12 @@ async def provider_status(session: AsyncSession) -> list[dict]:
     for provider, fields in PROVIDER_FIELDS.items():
         statuses = {}
         for key in fields:
-            present = _field_present(settings, key)
+            present = field_present(settings, key)
             statuses[key] = {
                 "configured": present,
                 "source": "app" if key in overrides else "environment" if present else "none",
                 "invalid": key in SECRET_FIELDS and key in overrides and not present,
-                "environment_configured": _field_present(environment, key),
+                "environment_configured": field_present(environment, key),
             }
         result.append(
             {

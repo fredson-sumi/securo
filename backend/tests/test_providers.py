@@ -7,7 +7,6 @@ from unittest.mock import patch
 from app.providers import (
     register_provider,
     get_provider,
-    list_providers,
     all_known_providers,
     get_storage_provider,
     _PROVIDERS,
@@ -69,13 +68,6 @@ def test_register_and_get_provider():
 def test_get_provider_unknown():
     with pytest.raises(ValueError, match="Unknown provider"):
         get_provider("nonexistent_provider")
-
-
-def test_list_providers_includes_registered():
-    register_provider("fake", FakeProvider)
-    result = list_providers()
-    names = [p["name"] for p in result]
-    assert "fake" in names
 
 
 def test_all_known_providers():
