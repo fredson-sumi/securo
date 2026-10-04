@@ -388,6 +388,12 @@ export function PortfolioPerformance({
       benchmarks: selected.map((_, index) => between(`benchmark_${index}`)),
     }
   }, [range, chartData, indexByDate, selected])
+  // Within about six months, month labels alone repeat; show the day too.
+  const shortSpan =
+    chartData.length > 1 &&
+    new Date(String(chartData[chartData.length - 1].date)).getTime() -
+      new Date(String(chartData[0].date)).getTime() <=
+      186 * 86_400_000
   const chartLabel = (state: { activeLabel?: unknown } | null | undefined) =>
     state?.activeLabel == null ? null : String(state.activeLabel)
 
@@ -920,10 +926,12 @@ export function PortfolioPerformance({
                         tickMargin={12}
                         minTickGap={40}
                         tickFormatter={(value: string) =>
-                          new Date(`${value}T00:00:00`).toLocaleDateString(dateLocale, {
-                            month: 'short',
-                            year: '2-digit',
-                          })
+                          new Date(`${value}T00:00:00`).toLocaleDateString(
+                            dateLocale,
+                            shortSpan
+                              ? { day: 'numeric', month: 'short' }
+                              : { month: 'short', year: '2-digit' },
+                          )
                         }
                       />
                       <YAxis
