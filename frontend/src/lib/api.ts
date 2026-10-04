@@ -72,6 +72,9 @@ import type {
   AssetValue,
   MarketSymbolMatch,
   MarketSymbolQuote,
+  BenchmarkMatch,
+  PortfolioPerformance,
+  PortfolioPerformancePeriod,
   Attachment,
   Goal,
   GoalSummary,
@@ -1355,6 +1358,37 @@ export const assets = {
     const { data } = await api.get('/assets/portfolio-trend')
     return data
   },
+  benchmarkSearch: async (q: string, limit = 15): Promise<BenchmarkMatch[]> => {
+    const { data } = await api.get('/assets/benchmarks/search', { params: { q, limit } })
+    return data
+  },
+  performance: async (
+    benchmarks: BenchmarkMatch[],
+    period: PortfolioPerformancePeriod,
+    assetGroupIds?: string[] | null,
+    selectedAssetGroupIds?: string[],
+    assetIds?: string[],
+  ): Promise<PortfolioPerformance> => {
+    const hasGroups = assetGroupIds != null && assetGroupIds.length > 0
+    const { data } = await api.get('/assets/performance', {
+      params: {
+        ...(benchmarks.length
+          ? {
+              provider: benchmarks.map((item) => item.provider),
+              benchmark: benchmarks.map((item) => item.symbol),
+            }
+          : {}),
+        period,
+        ...(hasGroups ? { asset_group_ids: assetGroupIds } : {}),
+        ...(selectedAssetGroupIds?.length
+          ? { selected_asset_group_ids: selectedAssetGroupIds }
+          : {}),
+        ...(assetIds?.length ? { asset_ids: assetIds } : {}),
+      },
+      paramsSerializer: { indexes: null as null },
+    })
+    return data
+  },
   marketSearch: async (q: string, limit = 15): Promise<MarketSymbolMatch[]> => {
     const { data } = await api.get('/assets/market/search', { params: { q, limit } })
     return data
@@ -1448,6 +1482,9 @@ export const assetGroups = {
   update: async (id: string, group: Partial<AssetGroup>): Promise<AssetGroup> => {
     const { data } = await api.patch(`/asset-groups/${id}`, group)
     return data
+  },
+  reorder: async (groupIds: string[]): Promise<void> => {
+    await api.put('/asset-groups/order', { group_ids: groupIds })
   },
   delete: async (id: string): Promise<void> => {
     await api.delete(`/asset-groups/${id}`)

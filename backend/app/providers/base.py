@@ -153,6 +153,10 @@ class HoldingData:
     name: str
     currency: str
     current_value: Decimal
+    # Pre-tax/pre-fee market value when the provider exposes it separately
+    # from the withdrawable balance. Performance comparisons use this value;
+    # portfolio totals continue to use ``current_value``.
+    gross_value: Optional[Decimal] = None
     quantity: Optional[Decimal] = None
     unit_price: Optional[Decimal] = None
     purchase_price: Optional[Decimal] = None
@@ -172,6 +176,26 @@ class HoldingData:
     # providers whose holdings aren't attributable to an account.
     account_external_id: Optional[str] = None
     account_name: Optional[str] = None
+
+
+@dataclass
+class HoldingTradeData:
+    """One buy or sell the provider reports for a holding.
+
+    Performance treats these as the exact money moved in or out of the
+    position, so a valuation increase is never mistaken for a purchase.
+    `quantity` is always positive; `kind` carries the direction. `fee` is
+    the cost of executing the trade (brokerage, exchange fees), excluding
+    income tax withheld on a sale.
+    """
+
+    external_id: str
+    holding_external_id: str
+    kind: Literal["buy", "sell"]
+    date: date
+    quantity: Decimal
+    price: Decimal
+    fee: Decimal = Decimal("0")
 
 
 @dataclass
@@ -381,6 +405,23 @@ class BankProvider(ABC):
         Providers that don't expose holdings (cash-only accounts, custom
         script providers without brokerage data, etc.) can rely on the
         default empty list.
+        """
+        return []
+
+    async def get_holding_trades(
+        self,
+        credentials: dict,
+        holdings: list[HoldingData],
+        *,
+        full_history: bool = False,
+    ) -> list[HoldingTradeData]:
+        """Fetch the buy/sell history behind `holdings`.
+
+        Providers whose regular sync only covers recent activity fetch their
+        complete available history when `full_history` is set; the sync asks
+        for it when the trades it has do not yet add up to a position.
+        Default is no trade data; the sync then leaves those holdings
+        without a ledger.
         """
         return []
 

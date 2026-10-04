@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.providers.pluggy import PluggyProvider
+from app.providers.pluggy import PluggyProvider, _build_holding_data
 
 
 def _mock_httpx_client(results: list[dict]) -> MagicMock:
@@ -36,6 +36,26 @@ async def _fetch(txns: list[dict]):
         PluggyProvider, "_ensure_api_key", new=AsyncMock(return_value="fake-key")
     ), patch("app.providers.pluggy.httpx.AsyncClient", return_value=fake_client):
         return await provider.get_transactions({"item_id": "i"}, "acc-ext-1")
+
+
+def test_holding_keeps_gross_and_withdrawable_values_separate():
+    holding = _build_holding_data(
+        {
+            "id": "investment-1",
+            "name": "CDI deposit",
+            "type": "FIXED_INCOME",
+            "currencyCode": "BRL",
+            "balance": 5160.10,
+            "amount": 5206.57,
+            "amountOriginal": 5000,
+            "issueDate": "2026-05-25",
+            "status": "ACTIVE",
+            "taxes": 46.47,
+        }
+    )
+    assert holding.current_value == Decimal("5160.1")
+    assert holding.gross_value == Decimal("5206.57")
+    assert holding.purchase_price == Decimal("5000")
 
 
 @pytest.mark.asyncio
