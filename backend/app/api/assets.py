@@ -19,6 +19,11 @@ from app.providers.market_price import (
     MarketPriceRateLimitedError,
     get_market_price_provider,
 )
+from app.providers.benchmark import (
+    BenchmarkProviderError,
+    BenchmarkRateLimitedError,
+    get_benchmark_provider,
+)
 from app.schemas.asset_import import (
     AssetImportPreview,
     AssetImportRequest,
@@ -34,10 +39,17 @@ from app.schemas.asset import (
     AssetUpdate,
     AssetValueCreate,
     AssetValueRead,
+    BenchmarkMatch,
     MarketSymbolMatch,
     MarketSymbolQuote,
+    PortfolioPerformanceRead,
 )
-from app.services import asset_import_service, asset_service, asset_transaction_service
+from app.services import (
+    asset_import_service,
+    asset_service,
+    asset_transaction_service,
+    portfolio_performance_service,
+)
 from app.services.fx_rate_service import convert
 
 logger = logging.getLogger(__name__)
@@ -104,6 +116,77 @@ async def market_quote(
     return quote
 
 
+# ----------------------------------------------------------------------------
+# Lazy benchmark comparison
+# ----------------------------------------------------------------------------
+
+
+@router.get("/benchmarks/search", response_model=list[BenchmarkMatch])
+async def benchmark_search(
+    q: str = Query(..., min_length=2, max_length=64),
+    limit: int = Query(15, ge=1, le=30),
+    _: User = Depends(current_active_user),
+) -> list[BenchmarkMatch]:
+    """Search index catalogs only when the Performance tab asks for it."""
+    try:
+        return await get_benchmark_provider().search(q, limit=limit)
+    except BenchmarkRateLimitedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Benchmark providers are currently rate-limiting requests.",
+        ) from exc
+    except BenchmarkProviderError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Benchmark search is temporarily unavailable.",
+        ) from exc
+
+
+@router.get("/performance", response_model=PortfolioPerformanceRead)
+async def portfolio_performance(
+    provider: list[str] | None = Query(None),
+    benchmark: list[str] | None = Query(None),
+    period: str = Query("1y", pattern="^(3m|6m|ytd|1y|3y|5y)$"),
+    asset_group_ids: list[uuid.UUID] | None = Query(None),
+    selected_asset_group_ids: list[uuid.UUID] | None = Query(None),
+    asset_ids: list[uuid.UUID] | None = Query(None),
+    ctx: WorkspaceContext = Depends(current_workspace),
+    session: AsyncSession = Depends(get_async_session),
+) -> PortfolioPerformanceRead:
+    providers = [item.strip().casefold() for item in (provider or [])]
+    symbols = [item.strip() for item in (benchmark or [])]
+    if len(providers) != len(symbols):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="provider and benchmark must contain the same number of values",
+        )
+    if len(providers) > 5:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="A maximum of five benchmarks can be compared",
+        )
+    if any(item not in {"yahoo", "b3"} for item in providers):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Unknown benchmark provider",
+        )
+    if any(not symbol or len(symbol) > 64 for symbol in symbols):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Invalid benchmark symbol",
+        )
+    comparisons = list(dict.fromkeys(zip(providers, symbols, strict=True)))
+    return await portfolio_performance_service.get_portfolio_performance_multi(
+        session,
+        ctx.workspace.id,
+        ctx.user_id,
+        ctx.workspace.default_currency,
+        comparisons,
+        period,
+        asset_group_ids,
+        selected_asset_group_ids=selected_asset_group_ids,
+        asset_ids=asset_ids,
+    )
 
 
 @router.post("/{asset_id}/refresh-price", response_model=AssetRead)
@@ -160,12 +243,18 @@ async def refresh_asset_price(
     primary_currency = ctx.user.primary_currency
     if refreshed.currency != primary_currency and refreshed.current_value is not None:
         converted, _ = await convert(
-            session, Decimal(str(refreshed.current_value)), refreshed.currency, primary_currency,
+            session,
+            Decimal(str(refreshed.current_value)),
+            refreshed.currency,
+            primary_currency,
         )
         refreshed.current_value_primary = float(converted)
         if refreshed.gain_loss is not None:
             gl_converted, _ = await convert(
-                session, Decimal(str(refreshed.gain_loss)), refreshed.currency, primary_currency,
+                session,
+                Decimal(str(refreshed.gain_loss)),
+                refreshed.currency,
+                primary_currency,
             )
             refreshed.gain_loss_primary = float(gl_converted)
     return refreshed
@@ -177,17 +266,25 @@ async def list_assets(
     ctx: WorkspaceContext = Depends(current_workspace),
     session: AsyncSession = Depends(get_async_session),
 ):
-    assets = await asset_service.get_assets(session, ctx.workspace.id, include_archived=include_archived)
+    assets = await asset_service.get_assets(
+        session, ctx.workspace.id, include_archived=include_archived
+    )
     primary_currency = ctx.user.primary_currency
     for asset in assets:
         if asset.currency != primary_currency and asset.current_value is not None:
             converted, _ = await convert(
-                session, Decimal(str(asset.current_value)), asset.currency, primary_currency,
+                session,
+                Decimal(str(asset.current_value)),
+                asset.currency,
+                primary_currency,
             )
             asset.current_value_primary = float(converted)
             if asset.gain_loss is not None:
                 gl_converted, _ = await convert(
-                    session, Decimal(str(asset.gain_loss)), asset.currency, primary_currency,
+                    session,
+                    Decimal(str(asset.gain_loss)),
+                    asset.currency,
+                    primary_currency,
                 )
                 asset.gain_loss_primary = float(gl_converted)
     return assets
@@ -305,8 +402,12 @@ async def import_asset_orders(
     """Apply the previewed orders to the workspace's holdings."""
     try:
         summary = await asset_import_service.import_orders(
-            session, ctx.workspace.id, ctx.user_id, data.orders,
-            group_id=data.group_id, filename=data.filename,
+            session,
+            ctx.workspace.id,
+            ctx.user_id,
+            data.orders,
+            group_id=data.group_id,
+            filename=data.filename,
         )
     except MarketPriceRateLimitedError:
         raise HTTPException(
@@ -387,9 +488,7 @@ async def delete_asset_transaction(
     ctx: WorkspaceContext = Depends(current_writable_workspace),
     session: AsyncSession = Depends(get_async_session),
 ):
-    asset = await asset_transaction_service.delete_transaction(
-        session, tx_id, ctx.workspace.id
-    )
+    asset = await asset_transaction_service.delete_transaction(session, tx_id, ctx.workspace.id)
     if asset is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
     return asset
@@ -462,13 +561,17 @@ async def get_asset_value_trend(
     ctx: WorkspaceContext = Depends(current_workspace),
     session: AsyncSession = Depends(get_async_session),
 ):
-    trend = await asset_service.get_asset_value_trend(session, asset_id, ctx.workspace.id, months=months)
+    trend = await asset_service.get_asset_value_trend(
+        session, asset_id, ctx.workspace.id, months=months
+    )
     if trend is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
     return trend
 
 
-@router.post("/{asset_id}/values", response_model=AssetValueRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{asset_id}/values", response_model=AssetValueRead, status_code=status.HTTP_201_CREATED
+)
 async def add_asset_value(
     asset_id: uuid.UUID,
     data: AssetValueCreate,

@@ -1,11 +1,12 @@
 import logging
 import uuid
+from collections.abc import Sequence
 from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal
 from typing import Any, Optional, cast
 
 from fastapi import HTTPException, status
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func, desc, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 ValueRecord = tuple[date, Decimal, Optional[Decimal]]  # (date, amount, price_per_share)
 TxRecord = tuple[date, str, Decimal, Optional[Decimal]]  # (date, kind, quantity, price_per_share)
+GrossValueRecord = tuple[date, Decimal, Optional[Decimal]]  # (date, net, gross)
 
 
 def _next_due_date(last_date: date, frequency: str) -> date:
@@ -104,12 +106,14 @@ def _generate_growth_values(
             current_amount = current_amount + growth_rate
         else:
             break
-        values.append(AssetValue(
-            asset_id=asset_id,
-            amount=Decimal(str(round(current_amount, 6))),
-            date=next_due,
-            source="rule",
-        ))
+        values.append(
+            AssetValue(
+                asset_id=asset_id,
+                amount=Decimal(str(round(current_amount, 6))),
+                date=next_due,
+                source="rule",
+            )
+        )
         current_date = next_due
         if len(values) >= 10000:
             break
@@ -134,9 +138,7 @@ def _asset_to_read(
     # is the signal that the holding is driven by the transactions ledger.
     is_ledger = asset.average_price is not None
     total_invested = (
-        float(asset.purchase_price)
-        if is_ledger and asset.purchase_price is not None
-        else None
+        float(asset.purchase_price) if is_ledger and asset.purchase_price is not None else None
     )
 
     return AssetRead(
@@ -200,6 +202,56 @@ async def _get_value_as_of(
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+def is_historical_seed(
+    asset: Asset, point_date: date, is_first_point: bool, has_later_points: bool
+) -> bool:
+    """Whether a synced holding's stored value is the sync's purchase-date
+    placeholder rather than a provider valuation.
+
+    Connected holdings get a one-time value at ``purchase_date`` from
+    ``purchase_price`` so charts have a starting point. Pluggy reports the
+    cost of the units still held there, which changes after a partial
+    redemption, so the placeholder is recognised by being the first stored
+    point, dated on the purchase date, not by its amount. Only used for
+    holdings with a trade ledger, which values that period exactly instead.
+    """
+    return (
+        asset.source != "manual"
+        and is_first_point
+        and has_later_points
+        and asset.purchase_date == point_date
+    )
+
+
+def build_synced_ledger_series(
+    snapshots: list[tuple[date, float]],
+    txs: list[TxRecord],
+) -> list[tuple[date, float]]:
+    """Value a synced holding from its trades until the provider reports it.
+
+    ``snapshots`` are the provider's own valuations (placeholders removed).
+    Before the first one, the position is valued as quantity held × the price
+    of its latest trade, so each buy and sell shows up on its own date at what
+    was actually paid or received. From the first snapshot on, the provider's
+    valuation is authoritative.
+    """
+    first_snapshot = snapshots[0][0] if snapshots else None
+    out: list[tuple[date, float]] = []
+    qty = Decimal("0")
+    for d, kind, q, p in sorted(txs, key=lambda t: t[0]):
+        if first_snapshot is not None and d >= first_snapshot:
+            break
+        qty += q if kind == "buy" else -q
+        if p is None:
+            continue
+        value = float(max(qty, Decimal("0")) * p)
+        if out and out[-1][0] == d:
+            out[-1] = (d, value)
+        else:
+            out.append((d, value))
+    return out + snapshots
 
 
 def build_market_value_series(
@@ -272,10 +324,78 @@ def build_market_value_series(
     return out
 
 
+def estimate_gross_value_series(
+    records: Sequence[GrossValueRecord],
+) -> list[tuple[date, float]]:
+    """Fill legacy gaps between exact gross valuation anchors.
+
+    Older synced rows only stored the withdrawable value. Once a provider gives
+    us an exact gross anchor, interpolate the gross gain against the observed
+    net gain within each uninterrupted holding segment. Decreases start a new
+    segment so a redemption is never mistaken for taxable performance.
+    Exact gross rows always win; assets with no gross data simply retain their
+    existing net series.
+    """
+    if not records:
+        return []
+    if not any(gross is not None for _, _, gross in records):
+        return [(point_date, float(net)) for point_date, net, _ in records]
+
+    adjusted: list[Decimal] = [net for _, net, _ in records]
+    segment_starts = [0]
+    for index in range(1, len(records)):
+        if records[index][1] < records[index - 1][1]:
+            segment_starts.append(index)
+    segment_starts.append(len(records))
+
+    for segment_index in range(len(segment_starts) - 1):
+        start = segment_starts[segment_index]
+        stop = segment_starts[segment_index + 1]
+        anchors = [
+            (index, gross)
+            for index, (_, _, gross) in enumerate(records[start:stop], start=start)
+            if gross is not None
+        ]
+        if not anchors:
+            continue
+        if anchors[0][0] != start:
+            anchors.insert(0, (start, records[start][1]))
+
+        for (left_index, left_gross), (right_index, right_gross) in zip(anchors, anchors[1:]):
+            left_net = records[left_index][1]
+            right_net = records[right_index][1]
+            net_change = right_net - left_net
+            for index in range(left_index, right_index + 1):
+                exact_gross = records[index][2]
+                if exact_gross is not None:
+                    adjusted[index] = exact_gross
+                elif net_change != 0:
+                    net_progress = (records[index][1] - left_net) / net_change
+                    adjusted[index] = left_gross + net_progress * (right_gross - left_gross)
+                else:
+                    adjusted[index] = left_gross
+
+        last_anchor_index, last_anchor_gross = anchors[-1]
+        last_anchor_net = records[last_anchor_index][1]
+        for index in range(last_anchor_index, stop):
+            exact_gross = records[index][2]
+            adjusted[index] = (
+                exact_gross
+                if exact_gross is not None
+                else last_anchor_gross + records[index][1] - last_anchor_net
+            )
+
+    return [
+        (point_date, float(adjusted[index])) for index, (point_date, _, _) in enumerate(records)
+    ]
+
+
 async def _load_asset_native_values(
     session: AsyncSession,
     assets: list[Asset],
     up_to_date: Optional[date] = None,
+    *,
+    use_gross: bool = False,
 ) -> dict[str, list[tuple[date, float]]]:
     """Bulk-load each asset's value series (native currency).
 
@@ -290,7 +410,13 @@ async def _load_asset_native_values(
 
     asset_ids = [a.id for a in assets]
     q = (
-        select(AssetValue.asset_id, AssetValue.date, AssetValue.amount, AssetValue.price)
+        select(
+            AssetValue.asset_id,
+            AssetValue.date,
+            AssetValue.amount,
+            AssetValue.price,
+            AssetValue.gross_amount,
+        )
         .where(AssetValue.asset_id.in_(asset_ids))
         .order_by(AssetValue.asset_id, AssetValue.date, AssetValue.id)
     )
@@ -299,17 +425,22 @@ async def _load_asset_native_values(
 
     rows = (await session.execute(q)).all()
     raw: dict[str, list[ValueRecord]] = {str(a.id): [] for a in assets}
-    for aid, d, amt, price in rows:
+    gross_raw: dict[str, list[GrossValueRecord]] = {str(a.id): [] for a in assets}
+    for aid, d, amt, price, gross_amount in rows:
         raw[str(aid)].append((d, amt, price))
+        gross_raw[str(aid)].append((d, amt, gross_amount))
 
-    # Bulk-load the ledger for market-priced holdings (one query).
-    market_ids = [a.id for a in assets if a.valuation_method == "market_price"]
+    # Bulk-load the ledger (one query): market-priced holdings are valued
+    # from it, synced holdings use it before their first provider snapshot.
     txs_by_aid: dict[str, list[TxRecord]] = {}
-    if market_ids:
+    if asset_ids:
         tq = select(
-            AssetTransaction.asset_id, AssetTransaction.date,
-            AssetTransaction.kind, AssetTransaction.quantity, AssetTransaction.price,
-        ).where(AssetTransaction.asset_id.in_(market_ids))
+            AssetTransaction.asset_id,
+            AssetTransaction.date,
+            AssetTransaction.kind,
+            AssetTransaction.quantity,
+            AssetTransaction.price,
+        ).where(AssetTransaction.asset_id.in_(asset_ids))
         if up_to_date is not None:
             tq = tq.where(AssetTransaction.date <= up_to_date)
         for aid, d, kind, qty, price in (await session.execute(tq)).all():
@@ -318,15 +449,32 @@ async def _load_asset_native_values(
             )
 
     values_map: dict[str, list[tuple[date, float]]] = {}
+    synced_ledger_ids: set[str] = set()
     for asset in assets:
         aid = str(asset.id)
         if asset.valuation_method == "market_price":
             values_map[aid] = build_market_value_series(raw[aid], txs_by_aid.get(aid, []))
+            continue
+        gross_rows = gross_raw[aid]
+        if asset.source != "manual" and txs_by_aid.get(aid):
+            synced_ledger_ids.add(aid)
+            gross_rows = [
+                row
+                for index, row in enumerate(gross_rows)
+                if not is_historical_seed(asset, row[0], index == 0, index < len(gross_rows) - 1)
+            ]
+        if use_gross:
+            series = estimate_gross_value_series(gross_rows)
         else:
-            values_map[aid] = [(d, float(amt)) for d, amt, _ in raw[aid]]
+            series = [(d, float(amt)) for d, amt, _ in gross_rows]
+        if aid in synced_ledger_ids:
+            series = build_synced_ledger_series(series, txs_by_aid[aid])
+        values_map[aid] = series
 
     for asset in assets:
         aid = str(asset.id)
+        if aid in synced_ledger_ids:
+            continue  # the ledger already supplies the opening value
         vals = values_map[aid]
         if asset.purchase_price is not None and asset.purchase_date is not None:
             if not vals or asset.purchase_date < vals[0][0]:
@@ -536,7 +684,6 @@ async def create_asset(
             )
         )
 
-
     # Create initial value if provided
     if data.current_value is not None:
         value = AssetValue(
@@ -576,7 +723,12 @@ async def create_asset(
     # from the transactions, consistently with later edits. `purchase_price`
     # is the total paid, so per-share = purchase_price / units; absent that we
     # fall back to the live quote (cost basis ≈ current value, gain ≈ 0).
-    if data.valuation_method == "market_price" and quote is not None and data.units and data.units > 0:
+    if (
+        data.valuation_method == "market_price"
+        and quote is not None
+        and data.units
+        and data.units > 0
+    ):
         from app.services import asset_transaction_service
 
         # Unit price is the per-unit cost of the opening buy (consistent with
@@ -605,7 +757,9 @@ async def create_asset(
     # Stamp purchase_price_primary
     if asset.purchase_price is not None:
         await stamp_primary_amount(
-            session, user_id, asset,
+            session,
+            user_id,
+            asset,
             amount_field="purchase_price",
             primary_field="purchase_price_primary",
             rate_field="_no_rate",  # Asset has no rate field
@@ -617,7 +771,9 @@ async def create_asset(
     latest = await _get_latest_value(session, asset.id)
     count = await _get_value_count(session, asset.id)
     tx_count = await session.scalar(
-        select(func.count()).select_from(AssetTransaction).where(AssetTransaction.asset_id == asset.id)
+        select(func.count())
+        .select_from(AssetTransaction)
+        .where(AssetTransaction.asset_id == asset.id)
     )
     return _asset_to_read(asset, latest, count, tx_count or 0)
 
@@ -674,10 +830,10 @@ async def update_asset(
     if regenerate_growth and asset.valuation_method == "growth_rule":
         # Delete all rule-generated values
         await session.execute(
-            select(AssetValue)
-            .where(AssetValue.asset_id == asset.id, AssetValue.source == "rule")
+            select(AssetValue).where(AssetValue.asset_id == asset.id, AssetValue.source == "rule")
         )
         from sqlalchemy import delete as sa_delete
+
         await session.execute(
             sa_delete(AssetValue).where(
                 AssetValue.asset_id == asset.id,
@@ -703,7 +859,9 @@ async def update_asset(
     if "purchase_price" in update_data or "currency" in update_data:
         if asset.purchase_price is not None:
             await stamp_primary_amount(
-                session, user_id, asset,
+                session,
+                user_id,
+                asset,
                 amount_field="purchase_price",
                 primary_field="purchase_price_primary",
                 rate_field="_no_rate",
@@ -731,9 +889,7 @@ async def update_asset(
     return _asset_to_read(asset, latest, count, tx_count)
 
 
-async def delete_asset(
-    session: AsyncSession, asset_id: uuid.UUID, workspace_id: uuid.UUID
-) -> bool:
+async def delete_asset(session: AsyncSession, asset_id: uuid.UUID, workspace_id: uuid.UUID) -> bool:
     """Delete an asset (cascades to values)."""
     result = await session.execute(
         select(Asset).where(Asset.id == asset_id, Asset.workspace_id == workspace_id)
@@ -835,15 +991,19 @@ async def get_asset_value_trend(
         txs = (
             await session.execute(
                 select(
-                    AssetTransaction.date, AssetTransaction.kind,
-                    AssetTransaction.quantity, AssetTransaction.price,
-                )
-                .where(AssetTransaction.asset_id == asset_id)
+                    AssetTransaction.date,
+                    AssetTransaction.kind,
+                    AssetTransaction.quantity,
+                    AssetTransaction.price,
+                ).where(AssetTransaction.asset_id == asset_id)
             )
         ).all()
         series = build_market_value_series(
             [(d, a, p) for d, a, p in rows],
-            [(d, k, Decimal(str(q)), Decimal(str(pr)) if pr is not None else None) for d, k, q, pr in txs],
+            [
+                (d, k, Decimal(str(q)), Decimal(str(pr)) if pr is not None else None)
+                for d, k, q, pr in txs
+            ],
         )
         return [{"date": d.isoformat(), "amount": v} for d, v in series]
 
@@ -854,6 +1014,12 @@ async def get_portfolio_trend(
     session: AsyncSession,
     workspace_id: uuid.UUID,
     user_id: Optional[uuid.UUID] = None,
+    asset_group_ids: Optional[list[uuid.UUID]] = None,
+    primary_currency: Optional[str] = None,
+    *,
+    use_gross_values: bool = False,
+    selected_asset_group_ids: Optional[list[uuid.UUID]] = None,
+    asset_ids: Optional[list[uuid.UUID]] = None,
 ) -> dict:
     """Get portfolio trend data for stacked area chart.
     Returns asset metadata + pivoted trend with fill-forward values.
@@ -861,26 +1027,42 @@ async def get_portfolio_trend(
     to the historical total; their contribution drops to 0 the day after
     sell_date.
 
-    `user_id` is only used to resolve the user's primary_currency for the
-    chart's converted totals; it falls back to the workspace's default when
-    not supplied.
+    `primary_currency` lets callers request a specific reporting currency.
+    Otherwise `user_id` resolves the user's display currency, with the app
+    default as the final fallback.
     """
-    result = await session.execute(
-        select(Asset).where(
-            Asset.workspace_id == workspace_id,
-            Asset.is_archived == False,
-        ).order_by(Asset.position, Asset.name)
+    query = select(Asset).where(
+        Asset.workspace_id == workspace_id,
+        Asset.is_archived == False,
     )
+    if asset_group_ids is not None:
+        if not asset_group_ids:
+            return {"assets": [], "trend": [], "total": 0.0}
+        query = query.where(Asset.group_id.in_(asset_group_ids))
+    # A custom performance scope is the union of complete wallets and
+    # individually selected holdings. The collection filter above remains an
+    # independent intersection, so IDs outside the active collection (or
+    # workspace) can never leak into the result.
+    if selected_asset_group_ids is not None or asset_ids is not None:
+        selection_filters = []
+        if selected_asset_group_ids:
+            selection_filters.append(Asset.group_id.in_(selected_asset_group_ids))
+        if asset_ids:
+            selection_filters.append(Asset.id.in_(asset_ids))
+        if not selection_filters:
+            return {"assets": [], "trend": [], "total": 0.0}
+        query = query.where(or_(*selection_filters))
+    result = await session.execute(query.order_by(Asset.position, Asset.name))
     active_assets = list(result.scalars().all())
 
     if not active_assets:
         return {"assets": [], "trend": [], "total": 0.0}
 
-    # Get user's primary currency for conversion
-    user = await session.get(User, user_id) if user_id is not None else None
-    primary_currency = user.primary_currency if user else get_settings().default_currency
+    if primary_currency is None:
+        user = await session.get(User, user_id) if user_id is not None else None
+        primary_currency = user.primary_currency if user else get_settings().default_currency
 
-    values_map = await _load_asset_native_values(session, active_assets)
+    values_map = await _load_asset_native_values(session, active_assets, use_gross=use_gross_values)
 
     asset_meta: list[dict[str, Any]] = []
     asset_currency: dict[str, str] = {}
@@ -889,12 +1071,14 @@ async def get_portfolio_trend(
 
     for asset in active_assets:
         aid = str(asset.id)
-        asset_meta.append({
-            "id": aid,
-            "name": asset.name,
-            "type": asset.type,
-            "group_id": str(asset.group_id) if asset.group_id else None,
-        })
+        asset_meta.append(
+            {
+                "id": aid,
+                "name": asset.name,
+                "type": asset.type,
+                "group_id": str(asset.group_id) if asset.group_id else None,
+            }
+        )
         asset_currency[aid] = asset.currency
 
         vals = values_map[aid]
@@ -995,9 +1179,7 @@ async def get_asset_values_at(
       falling back to purchase_price only if the asset existed by that date.
     - primary_currency=None: primary_total is 0.0.
     """
-    scope_filter = (
-        Asset.workspace_id == scope_id if by_workspace else Asset.user_id == scope_id
-    )
+    scope_filter = Asset.workspace_id == scope_id if by_workspace else Asset.user_id == scope_id
     # `group_ids` restricts to assets in a Collection's wallets (issue #105).
     # An empty list means "no wallets in this collection" → no assets.
     if group_ids is not None and len(group_ids) == 0:
@@ -1181,9 +1363,7 @@ async def refresh_all_market_prices(
             # ticker, one-off provider error, etc.). Try the full quote
             # path which also populates name/currency if needed.
             try:
-                ok = await refresh_market_price_asset(
-                    session, asset, market_provider=provider
-                )
+                ok = await refresh_market_price_asset(session, asset, market_provider=provider)
             except MarketPriceRateLimitedError:
                 logger.warning(
                     "Yahoo rate-limited mid-refresh after %d assets; halting",
