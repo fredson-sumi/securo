@@ -10,7 +10,7 @@ questions an investor actually asks:
 
 - What did my investments return over the last year, net of what I put in?
 - How does that compare with the Ibovespa, the S&P 500 or the CDI?
-- How did one wallet (say, my BTG account) do on its own?
+- How did one wallet (say, one broker account) do on its own?
 
 Brokers answer this with a **time-weighted return** (TWR). This RFC adds a
 Performance tab that computes it from the data Securo already has, and
@@ -40,7 +40,7 @@ growth = (value at end + money taken out) / (value at start + money put in)
 and the intervals are multiplied together. The result does not depend on
 *when* or *how much* money was added: the same holdings show the same return
 whether bought at once or over time. That is what makes it comparable with an
-index, and it is the figure brokers such as BTG and IBKR report.
+index, and it is the standard figure brokers report.
 
 ### Money in at the start of the day, money out at the end
 

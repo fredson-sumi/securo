@@ -103,7 +103,7 @@ describe('performance selection memory', () => {
 })
 
 describe('saved performance views', () => {
-  const view = { id: 'v1', name: 'BTG', walletIds: ['w1'], assetIds: ['a1'] }
+  const view = { id: 'v1', name: 'Retirement', walletIds: ['w1'], assetIds: ['a1'] }
 
   it('round-trips through preferences without touching other settings or workspaces', () => {
     const preferences = withSavedViews(
