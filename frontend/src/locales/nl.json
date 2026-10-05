@@ -1946,7 +1946,7 @@
     "performanceSourceNoData": "De gegevensbron heeft geen historische gegevens voor deze periode teruggegeven.",
     "performanceRetryBenchmark": "{{name}} opnieuw proberen",
     "performanceViewSave": "Weergave opslaan",
-    "performanceViewNamePlaceholder": "Geef deze selectie een naam (bijv. BTG)",
+    "performanceViewNamePlaceholder": "Geef deze selectie een naam (bijv. Pensioen)",
     "performanceViewUpdate": "“{{name}}” bijwerken",
     "performanceViewDelete": "“{{name}}” verwijderen",
     "performanceViewSaved": "Weergave “{{name}}” opgeslagen",
@@ -1955,7 +1955,7 @@
     "performanceSelectedPeriod": "Geselecteerde periode",
     "performanceClearSelection": "Selectie wissen",
     "performanceDragHint": "Sleep over de grafiek om het rendement van een periode te zien.",
-    "performanceCashFlowHint": "Tijdgewogen brutorendement: de verandering per periode, gecorrigeerd voor stortingen en opnames, samengesteld — de methode die brokers zoals BTG en IBKR gebruiken"
+    "performanceCashFlowHint": "Tijdgewogen brutorendement: de verandering per periode, gecorrigeerd voor stortingen en opnames, samengesteld. Stortingen en opnames tellen nooit als winst of verlies."
   },
   "reports": {
     "section": "Analyses",

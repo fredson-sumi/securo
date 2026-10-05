@@ -1944,7 +1944,7 @@
     "performanceSourceNoData": "Η πηγή δεδομένων δεν επέστρεψε ιστορικό για αυτή την περίοδο.",
     "performanceRetryBenchmark": "Επανάληψη για {{name}}",
     "performanceViewSave": "Αποθήκευση προβολής",
-    "performanceViewNamePlaceholder": "Ονομάστε αυτή την επιλογή (π.χ. BTG)",
+    "performanceViewNamePlaceholder": "Ονομάστε αυτή την επιλογή (π.χ. Σύνταξη)",
     "performanceViewUpdate": "Ενημέρωση «{{name}}»",
     "performanceViewDelete": "Διαγραφή «{{name}}»",
     "performanceViewSaved": "Η προβολή «{{name}}» αποθηκεύτηκε",
@@ -1953,7 +1953,7 @@
     "performanceSelectedPeriod": "Επιλεγμένη περίοδος",
     "performanceClearSelection": "Καθαρισμός επιλογής",
     "performanceDragHint": "Σύρετε στο γράφημα για να δείτε την απόδοση οποιασδήποτε περιόδου.",
-    "performanceCashFlowHint": "Χρονικά σταθμισμένη μικτή απόδοση: η μεταβολή κάθε περιόδου, χωρίς τις καταθέσεις και τις αναλήψεις, σύνθετα — η μέθοδος που χρησιμοποιούν χρηματιστές όπως η BTG και η IBKR"
+    "performanceCashFlowHint": "Χρονικά σταθμισμένη μικτή απόδοση: η μεταβολή κάθε περιόδου, χωρίς τις καταθέσεις και τις αναλήψεις, σύνθετα. Οι καταθέσεις και οι αναλήψεις δεν μετρούν ποτέ ως κέρδος ή ζημία."
   },
   "payees": {
     "noPayeeFound": "Δεν βρέθηκε δικαιούχος.",

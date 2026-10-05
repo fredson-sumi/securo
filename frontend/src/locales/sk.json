@@ -2060,7 +2060,7 @@
     "performanceSourceNoData": "Zdroj údajov nevrátil históriu pre toto obdobie.",
     "performanceRetryBenchmark": "Skúsiť znova: {{name}}",
     "performanceViewSave": "Uložiť zobrazenie",
-    "performanceViewNamePlaceholder": "Pomenujte tento výber (napr. BTG)",
+    "performanceViewNamePlaceholder": "Pomenujte tento výber (napr. Dôchodok)",
     "performanceViewUpdate": "Aktualizovať „{{name}}“",
     "performanceViewDelete": "Odstrániť „{{name}}“",
     "performanceViewSaved": "Zobrazenie „{{name}}“ uložené",
@@ -2069,7 +2069,7 @@
     "performanceSelectedPeriod": "Vybrané obdobie",
     "performanceClearSelection": "Zrušiť výber",
     "performanceDragHint": "Potiahnutím po grafe zobrazíte výnos za ľubovoľné obdobie.",
-    "performanceCashFlowHint": "Časovo vážený hrubý výnos: zmena v každom období očistená o vklady a výbery, zložená — metóda, ktorú používajú brokeri ako BTG a IBKR"
+    "performanceCashFlowHint": "Časovo vážený hrubý výnos: zmena v každom období očistená o vklady a výbery, zložená. Vklady a výbery sa nikdy nepočítajú ako zisk ani strata."
   },
   "reports": {
     "section": "Analytika",

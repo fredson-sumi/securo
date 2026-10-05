@@ -676,7 +676,7 @@ async def test_synced_position_top_up_is_a_contribution_not_performance(
         type="investment",
         currency="USD",
         valuation_method="manual",
-        source="ibkr",
+        source="broker",
     )
     session.add(asset)
     await session.flush()

@@ -310,7 +310,7 @@ def time_weighted_returns(
     contributions: dict[date, float],
     withdrawals: Optional[dict[date, float]] = None,
 ) -> list[tuple[date, float]]:
-    """Cumulative time-weighted return, as brokers such as BTG and IBKR report.
+    """Cumulative time-weighted return, the standard measure brokers report.
 
     Each interval's return is the change in value net of the money moved in
     or out, and the intervals compound. When or how much money was added

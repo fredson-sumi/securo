@@ -1944,7 +1944,7 @@
     "performanceSourceNoData": "डेटा स्रोत ने इस अवधि के लिए कोई इतिहास नहीं लौटाया।",
     "performanceRetryBenchmark": "{{name}} के लिए फिर से प्रयास करें",
     "performanceViewSave": "व्यू सेव करें",
-    "performanceViewNamePlaceholder": "इस चयन को नाम दें (जैसे BTG)",
+    "performanceViewNamePlaceholder": "इस चयन को नाम दें (जैसे सेवानिवृत्ति)",
     "performanceViewUpdate": "“{{name}}” अपडेट करें",
     "performanceViewDelete": "“{{name}}” हटाएँ",
     "performanceViewSaved": "व्यू “{{name}}” सेव हो गया",
@@ -1953,7 +1953,7 @@
     "performanceSelectedPeriod": "चयनित अवधि",
     "performanceClearSelection": "चयन हटाएँ",
     "performanceDragHint": "किसी भी अवधि का रिटर्न देखने के लिए चार्ट पर ड्रैग करें।",
-    "performanceCashFlowHint": "समय-भारित सकल रिटर्न: हर अवधि का बदलाव, योगदान और निकासी को घटाकर, चक्रवृद्धि रूप में — वही तरीका जो BTG और IBKR जैसे ब्रोकर इस्तेमाल करते हैं"
+    "performanceCashFlowHint": "समय-भारित सकल रिटर्न: हर अवधि का बदलाव, योगदान और निकासी को घटाकर, चक्रवृद्धि रूप में। योगदान और निकासी को कभी लाभ या हानि नहीं गिना जाता।"
   },
   "reports": {
     "section": "एनालिटिक्स",

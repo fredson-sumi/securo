@@ -1944,7 +1944,7 @@
     "performanceSourceNoData": "データソースからこの期間の履歴が返されませんでした。",
     "performanceRetryBenchmark": "{{name}}を再試行",
     "performanceViewSave": "ビューを保存",
-    "performanceViewNamePlaceholder": "この選択に名前を付ける(例:BTG)",
+    "performanceViewNamePlaceholder": "この選択に名前を付ける(例:老後資金)",
     "performanceViewUpdate": "「{{name}}」を更新",
     "performanceViewDelete": "「{{name}}」を削除",
     "performanceViewSaved": "ビュー「{{name}}」を保存しました",
@@ -1953,7 +1953,7 @@
     "performanceSelectedPeriod": "選択した期間",
     "performanceClearSelection": "選択を解除",
     "performanceDragHint": "グラフ上をドラッグすると、任意の期間のリターンを表示します。",
-    "performanceCashFlowHint": "時間加重の総リターン:各期間の変動から入出金を除き、複利で積み上げたもの。BTG や IBKR などの証券会社と同じ方式です"
+    "performanceCashFlowHint": "時間加重の総リターン:各期間の変動から入出金を除き、複利で積み上げたもの。入金や出金が利益や損失として計上されることはありません。"
   },
   "reports": {
     "section": "分析",
