@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
+from app.core.config import get_settings
 from app.providers.base import (
     AccountData,
     BankProvider,
