@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 
 import { PortfolioPerformance } from '@/components/portfolio-performance'
-import { assets } from '@/lib/api'
+import { assets, info } from '@/lib/api'
 import {
   readBenchmarkSelections,
   readLastSelection,
@@ -24,6 +24,7 @@ vi.mock('@/contexts/auth-context', () => ({
 vi.mock('@/lib/api', () => ({
   assets: { performance: vi.fn(), benchmarkSearch: vi.fn() },
   auth: { updateMe: vi.fn() },
+  info: { get: vi.fn() },
 }))
 
 const workspaceId = 'performance-workspace'
@@ -116,6 +117,24 @@ describe('PortfolioPerformance', () => {
     await i18n.changeLanguage('en')
     vi.mocked(assets.performance).mockResolvedValue(performanceData)
     vi.mocked(assets.benchmarkSearch).mockResolvedValue([benchmarks[4]])
+    vi.mocked(info.get).mockResolvedValue({ features: { agents: false } })
+  })
+
+  it('hides benchmark comparison when the server has it disabled', async () => {
+    vi.mocked(info.get).mockResolvedValue({
+      features: { agents: false, performance_benchmarks: false },
+    })
+    writeBenchmarkSelections(workspaceId, benchmarks.slice(0, 2))
+    renderPerformance()
+    await screen.findByText('+12.50%')
+
+    await waitFor(() => {
+      expect(vi.mocked(assets.performance).mock.lastCall?.[0]).toEqual([])
+    })
+    expect(screen.queryByRole('button', { name: /Compare/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('complementary', { name: 'Benchmarks' })).not.toBeInTheDocument()
+    // The stored choice survives, so re-enabling brings it back.
+    expect(readBenchmarkSelections(workspaceId)).toHaveLength(2)
   })
 
   it('makes an empty custom selection actionable and includes wallet children without counting them twice', async () => {

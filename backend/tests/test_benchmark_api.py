@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
@@ -447,3 +448,58 @@ async def test_performance_endpoint_filters_to_individual_assets(
 
     assert response.status_code == 200
     assert response.json()["portfolio_return"] == pytest.approx(10.0)
+
+
+def _benchmarks_disabled(monkeypatch) -> FakeBenchmarkProvider:
+    fake = FakeBenchmarkProvider()
+    monkeypatch.setattr("app.api.assets.get_benchmark_provider", lambda: fake)
+    monkeypatch.setattr(
+        "app.services.portfolio_performance_service.get_benchmark_provider", lambda: fake
+    )
+    monkeypatch.setattr(
+        "app.api.assets.get_settings",
+        lambda: SimpleNamespace(performance_benchmarks_enabled=False),
+    )
+    return fake
+
+
+@pytest.mark.asyncio
+async def test_disabled_benchmarks_never_reach_an_external_source(
+    client: AsyncClient,
+    auth_headers: dict,
+    session: AsyncSession,
+    test_user: User,
+    test_workspace,
+    monkeypatch,
+):
+    await _seed_performance_asset(session, test_user, test_workspace)
+    fake = _benchmarks_disabled(monkeypatch)
+
+    search = await client.get(
+        "/api/assets/benchmarks/search", params={"q": "test"}, headers=auth_headers
+    )
+    assert search.status_code == 404
+
+    response = await client.get(
+        "/api/assets/performance",
+        params={"provider": "yahoo", "benchmark": "^TEST", "period": "3m"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["portfolio_return"] == pytest.approx(10.0)
+    assert data["benchmarks"] == []
+    assert fake.search_calls == fake.history_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("env", "expected"), [(None, True), ("false", False)])
+async def test_info_reports_whether_benchmarks_are_enabled(
+    client: AsyncClient, monkeypatch, env, expected
+):
+    if env is None:
+        monkeypatch.delenv("PERFORMANCE_BENCHMARKS_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("PERFORMANCE_BENCHMARKS_ENABLED", env)
+    response = await client.get("/api/info")
+    assert response.json()["features"]["performance_benchmarks"] is expected
