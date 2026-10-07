@@ -628,9 +628,22 @@ async def _cash_flows(
         if asset.sell_date is None or not (start_date <= asset.sell_date < end_date):
             continue
         liquidation_date = asset.sell_date + timedelta(days=1)
-        native_proceeds = Decimal(str(asset.sell_price or 0))
-        if native_proceeds > 0:
-            proceeds = await in_primary(native_proceeds, asset.currency, asset.sell_date)
+        sell_price = asset.sell_price
+        if sell_price is None:
+            # Sold without a price (left blank, or a provider redemption with
+            # no trades): the holding left at its last valuation, rather than
+            # vanishing as a total loss.
+            proceeds = 0.0
+            for row in trend_rows:
+                if date.fromisoformat(str(row["date"])) > asset.sell_date:
+                    break
+                proceeds = float(row.get(aid, 0.0) or 0.0)
+        elif sell_price > 0:
+            proceeds = await in_primary(Decimal(str(sell_price)), asset.currency, asset.sell_date)
+        else:
+            # An explicit price of 0 writes the holding off.
+            proceeds = 0.0
+        if proceeds > 0:
             record(liquidation_date, -proceeds)
 
     return contributions, withdrawals, flow_dates

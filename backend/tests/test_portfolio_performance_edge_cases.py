@@ -215,7 +215,9 @@ async def test_day_trade_profit_counts_even_when_netted_on_one_date(
     assert await portfolio_return(session, test_user, test_workspace) == pytest.approx(expected)
 
 
-async def sold_manual_asset(session: AsyncSession, user: User, workspace, sell_price: str) -> None:
+async def sold_manual_asset(
+    session: AsyncSession, user: User, workspace, sell_price: str | None
+) -> None:
     asset = Asset(
         id=uuid.uuid4(),
         user_id=user.id,
@@ -227,7 +229,7 @@ async def sold_manual_asset(session: AsyncSession, user: User, workspace, sell_p
         purchase_date=day(0),
         purchase_price=Decimal("100"),
         sell_date=day(15),
-        sell_price=Decimal(sell_price),
+        sell_price=Decimal(sell_price) if sell_price is not None else None,
     )
     session.add(asset)
     await session.flush()
@@ -252,6 +254,56 @@ async def test_manual_asset_return_ends_at_its_sale_price(
 ):
     await sold_manual_asset(session, test_user, test_workspace, sell_price)
     assert await portfolio_return(session, test_user, test_workspace) == pytest.approx(expected)
+
+
+@pytest.mark.asyncio
+async def test_manual_asset_sold_without_a_price_ends_at_its_last_value(
+    session: AsyncSession, test_user: User, test_workspace
+):
+    """The sale price was left blank, which is not a total loss."""
+    await sold_manual_asset(session, test_user, test_workspace, None)
+    assert await portfolio_return(session, test_user, test_workspace) == pytest.approx(20.0)
+
+
+@pytest.mark.asyncio
+async def test_provider_redemption_without_trades_pays_out_the_last_balance(
+    session: AsyncSession, test_user: User, test_workspace
+):
+    """Pluggy reports a CDB fully redeemed, with no trades and no sale price."""
+    held = await stock(session, test_user, test_workspace, "HOLD3")
+    cdb = Asset(
+        id=uuid.uuid4(),
+        user_id=test_user.id,
+        workspace_id=test_workspace.id,
+        name="CDB",
+        type="investment",
+        currency="BRL",
+        valuation_method="manual",
+        source="pluggy",
+        external_metadata={"type": "FIXED_INCOME", "status": "TOTAL_WITHDRAWAL"},
+        sell_date=day(5),
+    )
+    session.add(cdb)
+    await session.flush()
+    session.add_all(
+        [
+            trade(held, "buy", day(0), "10", "100"),
+            close(held, day(0), "100"),
+            close(held, day(10), "100"),
+            *(
+                AssetValue(
+                    asset_id=cdb.id,
+                    workspace_id=test_workspace.id,
+                    amount=Decimal(amount),
+                    date=when,
+                    source="pluggy",
+                )
+                for when, amount in ((day(0), "1000"), (day(5), "1010"))
+            ),
+        ]
+    )
+    # The CDB earned 10 on a 2000 portfolio, then paid out its last balance.
+    assert await portfolio_return(session, test_user, test_workspace) == pytest.approx(0.5)
 
 
 @pytest.mark.asyncio
