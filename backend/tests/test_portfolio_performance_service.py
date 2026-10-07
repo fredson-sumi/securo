@@ -662,6 +662,20 @@ def test_ledger_flows_prefer_the_stored_share_count():
     assert flows[-1] == (date(2026, 9, 29), Decimal("500"))
 
 
+def test_ledger_flows_survive_a_day_whose_trades_net_to_no_cash():
+    """Buying 10 at 10 and selling 5 at 20 on one day moves shares but no cash."""
+    day = date(2026, 9, 10)
+    flows = snapshot_ledger_flows(
+        [(day, Decimal("10"), Decimal("100")), (day, Decimal("-5"), Decimal("-100"))],
+        [
+            (date(2026, 9, 1), 500.0, None),
+            (day, 600.0, None),
+            (date(2026, 9, 11), 600.0, None),
+        ],
+    )
+    assert flows == [(date(2026, 9, 11), Decimal("0"))]
+
+
 @pytest.mark.asyncio
 async def test_synced_position_top_up_is_a_contribution_not_performance(
     session: AsyncSession, test_user: User, test_workspace
