@@ -9,6 +9,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.models.asset import Asset
 from app.models.asset_value import AssetValue
 from app.models.user import User
@@ -501,5 +502,26 @@ async def test_info_reports_whether_benchmarks_are_enabled(
         monkeypatch.delenv("PERFORMANCE_BENCHMARKS_ENABLED", raising=False)
     else:
         monkeypatch.setenv("PERFORMANCE_BENCHMARKS_ENABLED", env)
-    response = await client.get("/api/info")
+    get_settings.cache_clear()  # read the environment again
+    try:
+        response = await client.get("/api/info")
+    finally:
+        get_settings.cache_clear()
     assert response.json()["features"]["performance_benchmarks"] is expected
+
+
+@pytest.mark.asyncio
+async def test_info_and_routes_agree_when_only_settings_turn_benchmarks_off(
+    client: AsyncClient, auth_headers: dict, monkeypatch
+):
+    """Turned off in backend/.env, which never reaches os.environ."""
+    monkeypatch.setenv("PERFORMANCE_BENCHMARKS_ENABLED", "true")
+    monkeypatch.setattr(get_settings(), "performance_benchmarks_enabled", False)
+
+    info = await client.get("/api/info")
+    search = await client.get(
+        "/api/assets/benchmarks/search", params={"q": "test"}, headers=auth_headers
+    )
+
+    assert info.json()["features"]["performance_benchmarks"] is False
+    assert search.status_code == 404
