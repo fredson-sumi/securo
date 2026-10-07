@@ -11,7 +11,10 @@ from decimal import Decimal
 from typing import Optional, TypeVar
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.app_clock import app_today
 
 from app.models.asset import Asset
 from app.models.asset_transaction import AssetTransaction
@@ -28,7 +31,7 @@ from app.schemas.asset import (
     PortfolioPerformancePoint,
     PortfolioPerformanceRead,
 )
-from app.services import asset_service
+from app.services import admin_service, asset_service
 from app.services.fx_rate_service import convert
 
 
@@ -45,6 +48,31 @@ _SYNCED_FIXED_INCOME_TYPES = {
 # Unit-price moves beyond this ratio between two snapshots look like a split
 # or reverse split, where the share count changes without any cash moving.
 _SPLIT_PRICE_RATIO = 0.6
+
+
+def _usage_key(workspace_id: uuid.UUID) -> str:
+    return f"performance_used:{workspace_id}"
+
+
+async def record_usage(session: AsyncSession, workspace_id: uuid.UUID) -> None:
+    """Remember that this workspace has opened the Performance tab.
+
+    Bank sync imports provider trades, one extra request per holding, only
+    for workspaces that use Performance, so nobody else pays for them.
+    """
+    key = _usage_key(workspace_id)
+    if await admin_service.get_app_setting(session, key) is not None:
+        return
+    try:
+        await admin_service.set_app_setting(session, key, app_today().isoformat())
+    except IntegrityError:
+        # Another request recorded it first.
+        await session.rollback()
+
+
+async def is_in_use(session: AsyncSession, workspace_id: uuid.UUID) -> bool:
+    """Whether this workspace has ever opened the Performance tab."""
+    return await admin_service.get_app_setting(session, _usage_key(workspace_id)) is not None
 
 
 def _add_months(value: date, months: int) -> date:

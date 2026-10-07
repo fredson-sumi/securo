@@ -182,6 +182,7 @@ async def portfolio_performance(
             detail="Invalid benchmark symbol",
         )
     comparisons = list(dict.fromkeys(zip(providers, symbols, strict=True)))
+    await portfolio_performance_service.record_usage(session, ctx.workspace.id)
     if not get_settings().performance_benchmarks_enabled:
         # The portfolio's own return needs no external data; a stale client
         # still asking for indices just gets it without them.

@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
-from sqlalchemy import delete, exists, func, or_, select, update
+from sqlalchemy import and_, delete, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -39,7 +39,7 @@ from app.providers.base import (
     SessionExpiredError,
 )
 from app.services import oauth_state
-from app.services import admin_service
+from app.services import admin_service, portfolio_performance_service
 from app.services import reconciliation_service, recurring_match_service
 from app.services.text_similarity import token_overlap
 from app.services.account_service import (
@@ -544,10 +544,42 @@ async def _sync_holdings(
     }
     seen: set[str] = set()
     synced_assets: dict[str, Asset] = {}
+    # Each asset's last valuation before today, so trades are only fetched
+    # for holdings whose position moved since the previous sync.
+    previous_amounts: dict[uuid.UUID, Decimal] = {}
+    if existing_assets:
+        latest = (
+            select(AssetValue.asset_id, func.max(AssetValue.date).label("date"))
+            .where(
+                AssetValue.asset_id.in_([asset.id for asset in existing_assets]),
+                AssetValue.date < today,
+            )
+            .group_by(AssetValue.asset_id)
+            .subquery()
+        )
+        rows = await session.execute(
+            select(AssetValue.asset_id, AssetValue.amount)
+            .join(
+                latest,
+                and_(
+                    AssetValue.asset_id == latest.c.asset_id,
+                    AssetValue.date == latest.c.date,
+                ),
+            )
+        )
+        # Sync keeps one valuation per asset per day.
+        previous_amounts = dict(rows.tuples().all())
+    changed: set[str] = set()
 
     for holding in holdings:
         seen.add(holding.external_id)
         existing = existing_by_external.get(holding.external_id)
+        if _position_changed(
+            holding,
+            existing.units if existing is not None else None,
+            previous_amounts.get(existing.id) if existing is not None else None,
+        ):
+            changed.add(holding.external_id)
 
         # Provider-reported closure (Pluggy TOTAL_WITHDRAWAL). Two cases:
         #   - New + withdrawn: skip entirely. A dead zero-balance asset
@@ -661,9 +693,13 @@ async def _sync_holdings(
         if ext_id not in seen and not asset.is_archived:
             asset.is_archived = True
 
-    await _sync_holding_trades(
-        session, provider, credentials, holdings, synced_assets, source
-    )
+    # Trades only serve the Performance tab, and fetching them costs one
+    # provider request per holding, so skip them where nobody uses it.
+    if await portfolio_performance_service.is_in_use(session, connection.workspace_id):
+        await _sync_holding_trades(
+            session, provider, credentials, holdings, synced_assets, source,
+            changed=changed,
+        )
 
     # Sync owns its wallets: drop any it emptied by re-attribution above
     # (e.g. the single connection-named wallet that predates per-institution
@@ -739,6 +775,26 @@ def _reconciled_trades(
     return None
 
 
+_POSITION_STEP = Decimal("0.000001")  # scale of Asset.units and AssetValue.amount
+
+
+def _position_changed(
+    holding: HoldingData,
+    previous_units: Optional[Decimal],
+    previous_amount: Optional[Decimal],
+) -> bool:
+    """Whether a holding may have been bought or sold since the last sync.
+
+    A reported share count settles it: price moves leave it alone. Without
+    one, any change in value might hide a deposit or a redemption.
+    """
+    if holding.quantity is not None and previous_units is not None:
+        return holding.quantity.quantize(_POSITION_STEP) != Decimal(previous_units)
+    if previous_amount is None:
+        return True
+    return holding.current_value.quantize(_POSITION_STEP) != Decimal(previous_amount)
+
+
 async def _sync_holding_trades(
     session: AsyncSession,
     provider: BankProvider,
@@ -746,6 +802,8 @@ async def _sync_holding_trades(
     holdings: list[HoldingData],
     synced_assets: dict[str, Asset],
     source: str,
+    *,
+    changed: Optional[set[str]] = None,
 ) -> None:
     """Mirror each holding's provider trades into its asset ledger.
 
@@ -755,21 +813,24 @@ async def _sync_holding_trades(
     covers only recent days keep a complete ledger; when the combination
     still does not add up, the provider's full history is requested once.
     Only provider-sourced rows are touched; trades the user entered stay.
+
+    With `changed`, only those holdings are fetched, plus any that have no
+    provider trades stored yet.
     """
-    targets = [
+    candidates = [
         holding
         for holding in holdings
         if (asset := synced_assets.get(holding.external_id)) is not None
         and asset.valuation_method != "market_price"
     ]
-    if not targets:
+    if not candidates:
         return
     stored: dict[uuid.UUID, dict[str, AssetTransaction]] = {}
     for tx in (
         await session.execute(
             select(AssetTransaction).where(
                 AssetTransaction.asset_id.in_(
-                    [synced_assets[h.external_id].id for h in targets]
+                    [synced_assets[h.external_id].id for h in candidates]
                 ),
                 AssetTransaction.source == source,
             )
@@ -777,6 +838,15 @@ async def _sync_holding_trades(
     ).scalars():
         if tx.external_id:
             stored.setdefault(tx.asset_id, {})[tx.external_id] = tx
+    targets = [
+        holding
+        for holding in candidates
+        if changed is None
+        or holding.external_id in changed
+        or synced_assets[holding.external_id].id not in stored
+    ]
+    if not targets:
+        return
 
     def combined(holding: HoldingData, fetched: list[HoldingTradeData]) -> list[HoldingTradeData]:
         asset = synced_assets[holding.external_id]
