@@ -220,6 +220,12 @@ export function PortfolioPerformance({
       }),
     [locale],
   )
+  // Axis ticks keep only the decimals they need, so a chart that moves less
+  // than 1% still gets distinct labels (0.25%, 0.5%…).
+  const axisFormatter = useMemo(
+    () => new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 2 }),
+    [locale],
+  )
   const formatExcess = (value: number | null | undefined) =>
     value == null
       ? '—'
@@ -949,7 +955,7 @@ export function PortfolioPerformance({
                         tickLine={false}
                         width={58}
                         tickMargin={8}
-                        tickFormatter={(value: number) => mask(`${value.toFixed(0)}%`)}
+                        tickFormatter={(value: number) => mask(axisFormatter.format(value / 100))}
                       />
                       {rangeStats && (
                         <ReferenceArea

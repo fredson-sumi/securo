@@ -306,6 +306,28 @@ describe('PortfolioPerformance', () => {
     })
   })
 
+  it('gives a chart that moves less than 1% distinct axis labels', async () => {
+    vi.mocked(assets.performance).mockResolvedValue({
+      ...performanceData,
+      portfolio_return: 0.5,
+      points: [
+        { date: '2026-01-07', portfolio: 0, benchmark: 0, benchmarks: {} },
+        { date: '2026-09-29', portfolio: 0.5, benchmark: 0, benchmarks: {} },
+      ],
+    })
+    const { container } = renderPerformance()
+
+    await waitFor(() => {
+      const labels = [
+        ...container.querySelectorAll(
+          '.recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-value',
+        ),
+      ].map((tick) => tick.textContent)
+      expect(labels.length).toBeGreaterThan(2)
+      expect(new Set(labels).size).toBe(labels.length)
+    })
+  })
+
   it('shows a dash in the tooltip where an index has no value, not 0%', async () => {
     writeBenchmarkSelections(workspaceId, benchmarks.slice(0, 1))
     vi.mocked(assets.performance).mockResolvedValue({
