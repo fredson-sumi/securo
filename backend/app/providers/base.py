@@ -190,7 +190,6 @@ class HoldingTradeData:
     """
 
     external_id: str
-    holding_external_id: str
     kind: Literal["buy", "sell"]
     date: date
     quantity: Decimal
@@ -409,21 +408,16 @@ class BankProvider(ABC):
         return []
 
     async def get_holding_trades(
-        self,
-        credentials: dict,
-        holdings: list[HoldingData],
-        *,
-        full_history: bool = False,
-    ) -> list[HoldingTradeData]:
-        """Fetch the buy/sell history behind `holdings`.
+        self, credentials: dict, holdings: list[HoldingData]
+    ) -> dict[str, list[HoldingTradeData]]:
+        """Fetch the buy/sell history behind each of `holdings`.
 
-        Providers whose regular sync only covers recent activity fetch their
-        complete available history when `full_history` is set; the sync asks
-        for it when the trades it has do not yet add up to a position.
-        Default is no trade data; the sync then leaves those holdings
-        without a ledger.
+        Returns each holding's trades keyed by its external id, with an empty
+        list when the provider has none. A holding whose trades could not be
+        fetched is left out, so the sync tries it again next time. Default is
+        no trade data.
         """
-        return []
+        return {}
 
     async def get_bills(self, credentials: dict, account_external_id: str) -> list[BillData]:
         """Fetch credit-card bills (faturas) for an account.

@@ -327,7 +327,7 @@ _TRADE_FEE_KEYS = (
 _TRADE_KINDS: dict[str, Literal["buy", "sell"]] = {"BUY": "buy", "SELL": "sell"}
 
 
-def _build_trade_data(holding_external_id: str, raw: dict) -> Optional[HoldingTradeData]:
+def _build_trade_data(raw: dict) -> Optional[HoldingTradeData]:
     """Map a Pluggy investment transaction to a trade, or None for rows
     that do not change the position (interest, dividends, taxes)."""
     kind = _TRADE_KINDS.get(str(raw.get("type") or "").upper())
@@ -350,7 +350,6 @@ def _build_trade_data(holding_external_id: str, raw: dict) -> Optional[HoldingTr
     )
     return HoldingTradeData(
         external_id=str(raw["id"]),
-        holding_external_id=holding_external_id,
         kind=kind,
         date=trade_date,
         quantity=quantity,
@@ -867,14 +866,11 @@ class PluggyProvider(BankProvider):
         return holdings
 
     async def get_holding_trades(
-        self,
-        credentials: dict,
-        holdings: list[HoldingData],
-        *,
-        full_history: bool = False,
-    ) -> list[HoldingTradeData]:
-        """Fetch buys and sells from /investments/{id}/transactions (always
-        the full history Pluggy has)."""
+        self, credentials: dict, holdings: list[HoldingData]
+    ) -> dict[str, list[HoldingTradeData]]:
+        """Fetch each holding's buys and sells from
+        /investments/{id}/transactions, which returns all the history Pluggy
+        has. A failed request is logged and only leaves that holding out."""
         headers = await self._headers()
         semaphore = asyncio.Semaphore(5)
 
@@ -892,7 +888,7 @@ class PluggyProvider(BankProvider):
                     data = resp.json()
                     results = data.get("results", [])
                     for raw in results:
-                        trade = _build_trade_data(holding_id, raw)
+                        trade = _build_trade_data(raw)
                         if trade is not None:
                             trades.append(trade)
                     if page >= data.get("totalPages", 1) or not results:
@@ -901,10 +897,23 @@ class PluggyProvider(BankProvider):
             return trades
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            batches = await asyncio.gather(
-                *(fetch(client, holding.external_id) for holding in holdings)
+            results = await asyncio.gather(
+                *(fetch(client, holding.external_id) for holding in holdings),
+                return_exceptions=True,
             )
-        return [trade for batch in batches for trade in batch]
+        trades_by_holding: dict[str, list[HoldingTradeData]] = {}
+        for holding, result in zip(holdings, results, strict=True):
+            if isinstance(result, BaseException):
+                if not isinstance(result, Exception):
+                    raise result
+                logger.warning(
+                    "Failed to fetch trades for Pluggy investment %s: %s",
+                    holding.external_id,
+                    result,
+                )
+                continue
+            trades_by_holding[holding.external_id] = result
+        return trades_by_holding
 
     async def get_bills(self, credentials: dict, account_external_id: str) -> list[BillData]:
         """Fetch credit-card bills from Pluggy /bills.

@@ -10,8 +10,10 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
+from app.providers.base import HoldingData
 from app.providers.pluggy import PluggyProvider, _build_holding_data
 
 
@@ -614,3 +616,41 @@ async def test_lookup_bank_info_disabled_by_default_skips_http_call():
     assert result is None
     fake_get_redis.assert_not_called()
     fake_client_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_holding_trades_leave_out_only_the_investment_whose_request_failed():
+    page = MagicMock()
+    page.raise_for_status = MagicMock()
+    page.json = MagicMock(
+        return_value={
+            "results": [
+                {"id": "t1", "type": "BUY", "tradeDate": "2026-08-01", "quantity": 10, "amount": 100}
+            ],
+            "totalPages": 1,
+        }
+    )
+    failure = MagicMock()
+    failure.raise_for_status = MagicMock(
+        side_effect=httpx.HTTPStatusError(
+            "Server error", request=MagicMock(), response=MagicMock(status_code=500)
+        )
+    )
+    client = MagicMock()
+    client.get = AsyncMock(side_effect=lambda url, **_: failure if "/inv-bad/" in url else page)
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    holdings = [
+        HoldingData(
+            external_id=external_id, name=external_id, currency="BRL", current_value=Decimal("100")
+        )
+        for external_id in ("inv-ok", "inv-bad")
+    ]
+
+    with patch.object(
+        PluggyProvider, "_ensure_api_key", new=AsyncMock(return_value="fake-key")
+    ), patch("app.providers.pluggy.httpx.AsyncClient", return_value=client):
+        trades = await PluggyProvider().get_holding_trades({"item_id": "i"}, holdings)
+
+    assert list(trades) == ["inv-ok"]
+    assert [trade.external_id for trade in trades["inv-ok"]] == ["t1"]

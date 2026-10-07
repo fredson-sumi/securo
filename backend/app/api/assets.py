@@ -49,6 +49,7 @@ from app.services import (
     asset_import_service,
     asset_service,
     asset_transaction_service,
+    connection_service,
     portfolio_performance_service,
 )
 from app.services.fx_rate_service import convert
@@ -182,7 +183,7 @@ async def portfolio_performance(
             detail="Invalid benchmark symbol",
         )
     comparisons = list(dict.fromkeys(zip(providers, symbols, strict=True)))
-    await portfolio_performance_service.record_usage(session, ctx.workspace.id)
+    await connection_service.enable_holding_trades(session, ctx.workspace.id)
     if not get_settings().performance_benchmarks_enabled:
         # The portfolio's own return needs no external data; a stale client
         # still asking for indices just gets it without them.
