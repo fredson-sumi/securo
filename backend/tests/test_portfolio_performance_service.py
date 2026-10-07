@@ -677,6 +677,52 @@ def test_ledger_flows_survive_a_day_whose_trades_net_to_no_cash():
 
 
 @pytest.mark.asyncio
+async def test_performance_ends_on_the_workspace_today(
+    session: AsyncSession, test_user: User, test_workspace, monkeypatch
+):
+    """Sync dates snapshots in the workspace's time zone, which can run a day
+    ahead of the server's clock."""
+    workspace_today = date.today() + timedelta(days=1)
+    monkeypatch.setattr(
+        "app.services.portfolio_performance_service.app_today", lambda: workspace_today
+    )
+    asset = Asset(
+        id=uuid.uuid4(),
+        user_id=test_user.id,
+        workspace_id=test_workspace.id,
+        name="Savings",
+        type="investment",
+        currency="BRL",
+        valuation_method="manual",
+    )
+    session.add(asset)
+    await session.flush()
+    session.add_all(
+        [
+            AssetValue(
+                asset_id=asset.id,
+                workspace_id=test_workspace.id,
+                amount=Decimal(amount),
+                date=when,
+                source="manual",
+            )
+            for when, amount in (
+                (workspace_today - timedelta(days=10), "100"),
+                (workspace_today, "110"),
+            )
+        ]
+    )
+    await session.commit()
+
+    result = await get_portfolio_performance_multi(
+        session, test_workspace.id, test_user.id, "BRL", [], "3m"
+    )
+
+    assert result.end_date == workspace_today
+    assert result.portfolio_return == pytest.approx(10.0)
+
+
+@pytest.mark.asyncio
 async def test_synced_position_top_up_is_a_contribution_not_performance(
     session: AsyncSession, test_user: User, test_workspace
 ):
