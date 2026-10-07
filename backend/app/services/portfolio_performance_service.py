@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import calendar
+from bisect import bisect_right
 import logging
 import uuid
 from datetime import date, timedelta
@@ -797,11 +798,11 @@ async def get_portfolio_performance_multi(
     rows_by_date = {date.fromisoformat(str(row["date"])): row for row in raw_trend}
 
     def snapshot(target: date) -> float:
-        prior_dates = [d for d in trend_dates if d <= target]
-        if not prior_dates:
+        # The trend's dates are ascending: use its last row on or before target.
+        index = bisect_right(trend_dates, target)
+        if index == 0:
             return 0.0
-        source_date = prior_dates[-1]
-        row = rows_by_date[source_date]
+        row = rows_by_date[trend_dates[index - 1]]
         total = 0.0
         for asset in assets:
             value = float(row.get(str(asset.id), 0.0) or 0.0)
