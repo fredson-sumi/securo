@@ -76,8 +76,8 @@ telling *money moved* apart from *market moved*:
 | Market-priced (ticker) holdings with a ledger | quantity held × stored daily close | each buy/sell on its own date, at `quantity × price ± fee`, converted with that day's FX rate |
 | Synced holdings whose provider trades reconcile | provider snapshots | each trade lands on the first snapshot whose share count reflects it, so a valuation update a day later is not mistaken for a gain or a loss |
 | Synced holdings without usable trades | provider snapshots | change in reported share count × new unit price. A unit price below 60% or above ~167% of the previous snapshot's is taken as a split, not a purchase. A value change alone never counts as a purchase |
-| Synced fixed income (CDB, LCI, Tesouro, COE…) | provider balance | a balance *decrease* is a redemption (withdrawal), so moving money to another holding is not a loss |
-| Manual assets (property, private funds…) | user-entered values | first appearance is a contribution; a sale returns `sell_price` the day after `sell_date` |
+| Synced fixed income (CDB, LCI, Tesouro, COE…) | provider balance | a balance *decrease* is a redemption (withdrawal), so moving money to another holding is not a loss; a full redemption without trades pays out the last balance |
+| Manual assets (property, private funds…) | user-entered values | first appearance is a contribution; a sale returns `sell_price` the day after `sell_date`, or the last value when no price was entered (an explicit 0 writes it off) |
 
 **Gross values.** Performance uses pre-tax values: income tax withheld on a
 redemption is not an investment loss. Migration `097` stores the provider's
@@ -123,6 +123,8 @@ with the expected return worked out by hand:
 | Day trade with fees next to a flat holding | +2.40% |
 | 2:1 split recorded as free shares (buy at price 0) | +10% |
 | Manual asset sold above / at its purchase value | +30% / 0% |
+| Manual asset sold without a price, last valued 20% up | +20% |
+| Synced CDB fully redeemed with no trades, next to a flat holding | +0.5% |
 
 ## Known limitations
 
