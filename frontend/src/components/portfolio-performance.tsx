@@ -29,6 +29,7 @@ import {
 } from 'recharts'
 import { assets, auth as authApi } from '@/lib/api'
 import { useAuth } from '@/contexts/auth-context'
+import { useFeatureFlags } from '@/hooks/use-feature-flags'
 import {
   MAX_PERFORMANCE_BENCHMARKS,
   type PerformanceView,
@@ -95,8 +96,14 @@ export function PortfolioPerformance({
   const [benchmarkOpen, setBenchmarkOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState('')
-  const [selected, setSelected] = useState<BenchmarkMatch[]>(() =>
+  const { benchmarksEnabled } = useFeatureFlags()
+  const [storedBenchmarks, setSelected] = useState<BenchmarkMatch[]>(() =>
     readBenchmarkSelections(workspaceId),
+  )
+  // With benchmarks disabled on the server, nothing is compared or fetched.
+  const selected = useMemo(
+    () => (benchmarksEnabled ? storedBenchmarks : []),
+    [benchmarksEnabled, storedBenchmarks],
   )
   // Reopen on whatever was selected last time in this workspace.
   const [lastSelection] = useState(() => readLastSelection(workspaceId))
@@ -648,153 +655,155 @@ export function PortfolioPerformance({
           </Popover>
         </div>
 
-        <Popover
-          open={benchmarkOpen}
-          onOpenChange={(open) => {
-            setBenchmarkOpen(open)
-            if (!open) {
-              setQuery('')
-              setDebouncedQuery('')
-            }
-          }}
-        >
-          <PopoverTrigger asChild>
-            <Button variant="outline" className="h-10 bg-card">
-              <Plus size={16} aria-hidden="true" />
-              {t('assets.performanceCompare')}
-              {selected.length > 0 && (
-                <span className="rounded-md bg-primary/10 px-1.5 py-0.5 text-xs tabular-nums text-primary">
-                  {selected.length}
-                </span>
-              )}
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent
-            align="start"
-            className="max-h-[var(--radix-popover-content-available-height)] w-[min(24rem,calc(100vw-2rem))] overflow-y-auto p-0"
-            aria-label={t('assets.performanceBenchmarks')}
+        {benchmarksEnabled && (
+          <Popover
+            open={benchmarkOpen}
+            onOpenChange={(open) => {
+              setBenchmarkOpen(open)
+              if (!open) {
+                setQuery('')
+                setDebouncedQuery('')
+              }
+            }}
           >
-            <div className="space-y-3 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-semibold">{t('assets.performanceBenchmarks')}</p>
-                <span className="text-xs tabular-nums text-muted-foreground">
-                  {selected.length} / {MAX_PERFORMANCE_BENCHMARKS}
-                </span>
-              </div>
-              {selected.length < MAX_PERFORMANCE_BENCHMARKS ? (
-                <>
-                  <div className="relative">
-                    <Search
-                      size={16}
-                      className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-                      aria-hidden="true"
-                    />
-                    <Input
-                      value={query}
-                      onChange={(event) => setQuery(event.target.value)}
-                      placeholder={t('assets.benchmarkSearchPlaceholder')}
-                      aria-label={t('assets.benchmarkSearchPlaceholder')}
-                      className="h-10 pl-9 pr-10"
-                    />
-                    {query && (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => setQuery('')}
-                        className="absolute right-1 top-1/2 -translate-y-1/2"
-                        aria-label={t('common.close')}
-                      >
-                        <X size={15} aria-hidden="true" />
-                      </Button>
-                    )}
-                  </div>
-                  <p className="text-xs leading-relaxed text-muted-foreground">
-                    {t('assets.benchmarkSearchHint')}
-                  </p>
-                </>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  {t('assets.performanceBenchmarkLimit')}
-                </p>
-              )}
-              {selected.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {selected.map((benchmark, index) => (
-                    <div
-                      key={benchmarkKey(benchmark)}
-                      className="inline-flex max-w-full items-center gap-2 rounded-lg border border-border py-0.5 pl-2.5 pr-0.5"
-                    >
-                      <span
-                        className="size-2 shrink-0 rounded-full"
-                        style={{ backgroundColor: BENCHMARK_COLORS[index] }}
-                      />
-                      <span className="truncate text-xs font-medium" title={benchmark.name}>
-                        {benchmark.name}
-                      </span>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => removeBenchmark(benchmarkKey(benchmark))}
-                        aria-label={t('assets.performanceRemoveBenchmark', {
-                          name: benchmark.name,
-                        })}
-                      >
-                        <X size={14} aria-hidden="true" />
-                      </Button>
-                    </div>
-                  ))}
+            <PopoverTrigger asChild>
+              <Button variant="outline" className="h-10 bg-card">
+                <Plus size={16} aria-hidden="true" />
+                {t('assets.performanceCompare')}
+                {selected.length > 0 && (
+                  <span className="rounded-md bg-primary/10 px-1.5 py-0.5 text-xs tabular-nums text-primary">
+                    {selected.length}
+                  </span>
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="start"
+              className="max-h-[var(--radix-popover-content-available-height)] w-[min(24rem,calc(100vw-2rem))] overflow-y-auto p-0"
+              aria-label={t('assets.performanceBenchmarks')}
+            >
+              <div className="space-y-3 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold">{t('assets.performanceBenchmarks')}</p>
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {selected.length} / {MAX_PERFORMANCE_BENCHMARKS}
+                  </span>
                 </div>
-              )}
-            </div>
-            {query.trim().length >= 2 && selected.length < MAX_PERFORMANCE_BENCHMARKS && (
-              <div
-                className="border-t border-border"
-                aria-live="polite"
-                aria-busy={search.isFetching || query.trim() !== debouncedQuery}
-              >
-                {search.isFetching || query.trim() !== debouncedQuery ? (
-                  <div className="space-y-2 p-3">
-                    <Skeleton className="h-10" />
-                    <Skeleton className="h-10" />
-                  </div>
-                ) : search.isError ? (
-                  <p className="p-4 text-sm text-rose-600 dark:text-rose-400">
-                    {apiErrorDetail(search.error) ?? t('assets.performanceLoadError')}
-                  </p>
-                ) : searchMatches.length > 0 ? (
-                  <div className="max-h-[min(16rem,35dvh)] overflow-y-auto overscroll-contain p-1">
-                    {searchMatches.map((match) => (
-                      <button
-                        key={benchmarkKey(match)}
-                        type="button"
-                        onClick={() => chooseBenchmark(match)}
-                        className="flex min-h-12 w-full items-center gap-3 rounded-md px-3 py-2.5 text-left outline-none hover:bg-muted/60 focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                      >
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-medium">{match.name}</span>
-                          <span className="block text-xs text-muted-foreground">
-                            {match.symbol}
-                            {match.exchange ? ` · ${match.exchange}` : ''}
-                          </span>
-                        </span>
-                        <Plus
-                          size={16}
-                          className="shrink-0 text-muted-foreground"
-                          aria-hidden="true"
-                        />
-                      </button>
-                    ))}
-                  </div>
+                {selected.length < MAX_PERFORMANCE_BENCHMARKS ? (
+                  <>
+                    <div className="relative">
+                      <Search
+                        size={16}
+                        className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+                        aria-hidden="true"
+                      />
+                      <Input
+                        value={query}
+                        onChange={(event) => setQuery(event.target.value)}
+                        placeholder={t('assets.benchmarkSearchPlaceholder')}
+                        aria-label={t('assets.benchmarkSearchPlaceholder')}
+                        className="h-10 pl-9 pr-10"
+                      />
+                      {query && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => setQuery('')}
+                          className="absolute right-1 top-1/2 -translate-y-1/2"
+                          aria-label={t('common.close')}
+                        >
+                          <X size={15} aria-hidden="true" />
+                        </Button>
+                      )}
+                    </div>
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      {t('assets.benchmarkSearchHint')}
+                    </p>
+                  </>
                 ) : (
-                  <p className="p-4 text-sm text-muted-foreground">
-                    {t('assets.benchmarkNoResults')}
+                  <p className="text-xs text-muted-foreground">
+                    {t('assets.performanceBenchmarkLimit')}
                   </p>
                 )}
+                {selected.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {selected.map((benchmark, index) => (
+                      <div
+                        key={benchmarkKey(benchmark)}
+                        className="inline-flex max-w-full items-center gap-2 rounded-lg border border-border py-0.5 pl-2.5 pr-0.5"
+                      >
+                        <span
+                          className="size-2 shrink-0 rounded-full"
+                          style={{ backgroundColor: BENCHMARK_COLORS[index] }}
+                        />
+                        <span className="truncate text-xs font-medium" title={benchmark.name}>
+                          {benchmark.name}
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => removeBenchmark(benchmarkKey(benchmark))}
+                          aria-label={t('assets.performanceRemoveBenchmark', {
+                            name: benchmark.name,
+                          })}
+                        >
+                          <X size={14} aria-hidden="true" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
-          </PopoverContent>
-        </Popover>
+              {query.trim().length >= 2 && selected.length < MAX_PERFORMANCE_BENCHMARKS && (
+                <div
+                  className="border-t border-border"
+                  aria-live="polite"
+                  aria-busy={search.isFetching || query.trim() !== debouncedQuery}
+                >
+                  {search.isFetching || query.trim() !== debouncedQuery ? (
+                    <div className="space-y-2 p-3">
+                      <Skeleton className="h-10" />
+                      <Skeleton className="h-10" />
+                    </div>
+                  ) : search.isError ? (
+                    <p className="p-4 text-sm text-rose-600 dark:text-rose-400">
+                      {apiErrorDetail(search.error) ?? t('assets.performanceLoadError')}
+                    </p>
+                  ) : searchMatches.length > 0 ? (
+                    <div className="max-h-[min(16rem,35dvh)] overflow-y-auto overscroll-contain p-1">
+                      {searchMatches.map((match) => (
+                        <button
+                          key={benchmarkKey(match)}
+                          type="button"
+                          onClick={() => chooseBenchmark(match)}
+                          className="flex min-h-12 w-full items-center gap-3 rounded-md px-3 py-2.5 text-left outline-none hover:bg-muted/60 focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                        >
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium">{match.name}</span>
+                            <span className="block text-xs text-muted-foreground">
+                              {match.symbol}
+                              {match.exchange ? ` · ${match.exchange}` : ''}
+                            </span>
+                          </span>
+                          <Plus
+                            size={16}
+                            className="shrink-0 text-muted-foreground"
+                            aria-hidden="true"
+                          />
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="p-4 text-sm text-muted-foreground">
+                      {t('assets.benchmarkNoResults')}
+                    </p>
+                  )}
+                </div>
+              )}
+            </PopoverContent>
+          </Popover>
+        )}
         {performance.isFetching &&
           !performance.isLoading &&
           !emptyCollection &&

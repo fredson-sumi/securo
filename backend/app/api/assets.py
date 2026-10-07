@@ -8,6 +8,7 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import current_active_user
+from app.core.config import get_settings
 from app.core.database import get_async_session
 from app.core.workspace_context import (
     WorkspaceContext,
@@ -128,6 +129,11 @@ async def benchmark_search(
     _: User = Depends(current_active_user),
 ) -> list[BenchmarkMatch]:
     """Search index catalogs only when the Performance tab asks for it."""
+    if not get_settings().performance_benchmarks_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Benchmark comparison is disabled on this server.",
+        )
     try:
         return await get_benchmark_provider().search(q, limit=limit)
     except BenchmarkRateLimitedError as exc:
@@ -176,6 +182,10 @@ async def portfolio_performance(
             detail="Invalid benchmark symbol",
         )
     comparisons = list(dict.fromkeys(zip(providers, symbols, strict=True)))
+    if not get_settings().performance_benchmarks_enabled:
+        # The portfolio's own return needs no external data; a stale client
+        # still asking for indices just gets it without them.
+        comparisons = []
     return await portfolio_performance_service.get_portfolio_performance_multi(
         session,
         ctx.workspace.id,
