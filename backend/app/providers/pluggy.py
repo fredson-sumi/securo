@@ -329,12 +329,14 @@ _TRADE_KINDS: dict[str, Literal["buy", "sell"]] = {"BUY": "buy", "SELL": "sell"}
 
 def _build_trade_data(raw: dict) -> Optional[HoldingTradeData]:
     """Map a Pluggy investment transaction to a trade, or None for rows
-    that do not change the position (interest, dividends, taxes)."""
+    that do not change the position (interest, dividends, taxes) or lack
+    what a trade needs."""
+    trade_id = raw.get("id")
     kind = _TRADE_KINDS.get(str(raw.get("type") or "").upper())
     trade_date = _date_or_none(raw.get("tradeDate") or raw.get("date"))
     quantity = _decimal_or_none(raw.get("quantity"))
     amount = _decimal_or_none(raw.get("amount"))
-    if kind is None or trade_date is None or not quantity or quantity <= 0:
+    if not trade_id or kind is None or trade_date is None or not quantity or quantity <= 0:
         return None
     price = _decimal_or_none(raw.get("value"))
     if amount is not None and amount > 0:
@@ -349,7 +351,7 @@ def _build_trade_data(raw: dict) -> Optional[HoldingTradeData]:
         Decimal("0"),
     )
     return HoldingTradeData(
-        external_id=str(raw["id"]),
+        external_id=str(trade_id),
         kind=kind,
         date=trade_date,
         quantity=quantity,

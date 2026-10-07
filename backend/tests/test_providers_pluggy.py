@@ -654,3 +654,33 @@ async def test_holding_trades_leave_out_only_the_investment_whose_request_failed
 
     assert list(trades) == ["inv-ok"]
     assert [trade.external_id for trade in trades["inv-ok"]] == ["t1"]
+
+
+@pytest.mark.asyncio
+async def test_holding_trades_skip_a_row_without_an_id():
+    """One malformed row must not cost the investment its other trades."""
+    page = MagicMock()
+    page.raise_for_status = MagicMock()
+    page.json = MagicMock(
+        return_value={
+            "results": [
+                {"type": "BUY", "tradeDate": "2026-08-01", "quantity": 5, "amount": 50},
+                {"id": "t1", "type": "BUY", "tradeDate": "2026-08-01", "quantity": 10, "amount": 100},
+            ],
+            "totalPages": 1,
+        }
+    )
+    client = MagicMock()
+    client.get = AsyncMock(return_value=page)
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    holding = HoldingData(
+        external_id="inv", name="inv", currency="BRL", current_value=Decimal("100")
+    )
+
+    with patch.object(
+        PluggyProvider, "_ensure_api_key", new=AsyncMock(return_value="fake-key")
+    ), patch("app.providers.pluggy.httpx.AsyncClient", return_value=client):
+        trades = await PluggyProvider().get_holding_trades({"item_id": "i"}, [holding])
+
+    assert [trade.external_id for trade in trades["inv"]] == ["t1"]
