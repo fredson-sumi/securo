@@ -14,6 +14,7 @@ from typing import Optional, TypeVar
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.app_clock import app_today
 from app.models.asset import Asset
 from app.models.asset_transaction import AssetTransaction
 from app.models.asset_value import AssetValue
@@ -665,7 +666,8 @@ async def get_portfolio_performance_multi(
 ) -> PortfolioPerformanceRead:
     first_provider = benchmarks[0][0] if benchmarks else None
     first_symbol = benchmarks[0][1] if benchmarks else None
-    last_date = end_date or date.today()
+    # The workspace's date, which sync uses to date each snapshot.
+    last_date = end_date or app_today()
     requested_start = period_start(period, last_date)
     trend = await asset_service.get_portfolio_trend(
         session,
