@@ -120,8 +120,10 @@ def snapshot_ledger_flows(
     another only shows a purchase the next day. Each trade therefore lands
     on its own date's snapshot if that snapshot holds the post-trade share
     count, and on the next snapshot otherwise. The share count is the stored
-    one when known, else the snapshot value at the trade's own price. Trades
-    no snapshot reflects yet are left out until one does.
+    one when known, else the snapshot value at the trade's own price. A day
+    whose trades net to no cash has no price to count with, so it waits for
+    the next snapshot. Trades no snapshot reflects yet are left out until
+    one does.
     """
     by_date: dict[date, tuple[Decimal, Decimal]] = {}
     for trade_date, quantity, flow in trades:
@@ -144,7 +146,7 @@ def snapshot_ledger_flows(
         reflected = later
         if same_day is not None:
             _, value, shares = same_day
-            if shares is None and quantity:
+            if shares is None and quantity and flow:
                 shares = value / float(abs(flow) / abs(quantity))
             if shares is not None and abs(shares - float(after)) < abs(shares - float(before)):
                 reflected = same_day
