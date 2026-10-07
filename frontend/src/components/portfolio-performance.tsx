@@ -973,6 +973,9 @@ export function PortfolioPerformance({
                         content={({ active, payload, label }) => {
                           if (!active || !payload?.length || !label) return null
                           const row = payload[0].payload as Record<string, string | number | null>
+                          // A date with no value (e.g. outside an index's history)
+                          // shows a dash, matching the gap in its line.
+                          const returnAt = (key: string) => (row[key] == null ? null : Number(row[key]))
                           return (
                             <div className="max-w-[min(20rem,75vw)] rounded-xl border border-border bg-popover p-3 text-xs shadow-lg">
                               <p className="mb-3 border-b border-border pb-2 font-medium text-muted-foreground">
@@ -983,7 +986,7 @@ export function PortfolioPerformance({
                                   {t('assets.portfolioReturn')}
                                 </span>
                                 <span className="shrink-0 font-semibold tabular-nums">
-                                  {formatReturn(Number(row.portfolio ?? 0))}
+                                  {formatReturn(returnAt('portfolio'))}
                                 </span>
                               </div>
                               {availableBenchmarks.map(({ benchmark, index }) => (
@@ -997,7 +1000,7 @@ export function PortfolioPerformance({
                                   />
                                   <span className="min-w-0 flex-1 truncate">{benchmark.name}</span>
                                   <span className="shrink-0 font-medium tabular-nums">
-                                    {formatReturn(Number(row[`benchmark_${index}`] ?? 0))}
+                                    {formatReturn(returnAt(`benchmark_${index}`))}
                                   </span>
                                 </div>
                               ))}

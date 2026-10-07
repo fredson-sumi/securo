@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 
 import { PortfolioPerformance } from '@/components/portfolio-performance'
 import { assets, info } from '@/lib/api'
@@ -108,6 +108,17 @@ function renderPerformance(
     />,
     { queryClient },
   )
+}
+
+/** Point at the chart. jsdom has no layout, so the chart gets a size first. */
+function hoverChart(container: HTMLElement, clientX: number) {
+  const chart = container.querySelector<HTMLElement>('.recharts-wrapper')!
+  vi.spyOn(chart, 'getBoundingClientRect').mockReturnValue(
+    DOMRect.fromRect({ width: 800, height: 300 }),
+  )
+  Object.defineProperty(chart, 'offsetWidth', { configurable: true, value: 800 })
+  Object.defineProperty(chart, 'offsetHeight', { configurable: true, value: 300 })
+  fireEvent.mouseMove(chart, { clientX, clientY: 150 })
 }
 
 describe('PortfolioPerformance', () => {
@@ -293,6 +304,29 @@ describe('PortfolioPerformance', () => {
       expect(ticks.length).toBeGreaterThan(0)
       for (const tick of ticks) expect(tick).toHaveTextContent('••••')
     })
+  })
+
+  it('shows a dash in the tooltip where an index has no value, not 0%', async () => {
+    writeBenchmarkSelections(workspaceId, benchmarks.slice(0, 1))
+    vi.mocked(assets.performance).mockResolvedValue({
+      ...performanceData,
+      points: [
+        // The index's history starts after the period does.
+        { date: '2026-01-07', portfolio: 0, benchmark: 0, benchmarks: {} },
+        performanceData.points[1],
+      ],
+    })
+    const { container } = renderPerformance()
+    await waitFor(() => expect(container.querySelector('.recharts-line')).toBeInTheDocument())
+
+    hoverChart(container, 90)
+
+    const tooltip = await waitFor(() => {
+      const content = container.querySelector<HTMLElement>('.recharts-tooltip-wrapper')
+      expect(content).toHaveTextContent('Jan 7, 2026')
+      return content!
+    })
+    expect(within(tooltip).getByText('S&P 500').nextElementSibling).toHaveTextContent('—')
   })
 
   it('offers a retry after a failed request and recovers without resetting the controls', async () => {
