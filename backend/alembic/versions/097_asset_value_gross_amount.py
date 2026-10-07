@@ -42,7 +42,10 @@ def upgrade() -> None:
 
     # external_metadata is the latest provider snapshot. Backfill its gross
     # amount only onto that asset's latest value; earlier gaps are estimated by
-    # the performance read path between exact cost/current anchors.
+    # the performance read path between exact cost/current anchors. Sold and
+    # redeemed holdings are skipped: sync keeps refreshing their metadata (a
+    # redemption reports 0) but stops adding values, so the snapshot is newer
+    # than their latest value.
     op.execute(
         """
         WITH latest_values AS (
@@ -56,6 +59,8 @@ def upgrade() -> None:
         WHERE value.id = latest.id
           AND latest.asset_id = asset.id
           AND asset.source = 'pluggy'
+          AND asset.sell_date IS NULL
+          AND upper(coalesce(asset.external_metadata ->> 'status', '')) <> 'TOTAL_WITHDRAWAL'
           AND asset.external_metadata ->> 'amount' IS NOT NULL
           AND asset.external_metadata ->> 'amount'
               ~ '^-?[0-9]+([.][0-9]+)?$'
