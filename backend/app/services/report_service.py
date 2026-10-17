@@ -466,10 +466,8 @@ async def get_income_expenses_report(
             func.sum(case((Transaction.type == "credit", amount_expr), else_=0)),
             func.sum(case((Transaction.type == "debit", amount_expr), else_=0)),
         )
-        .join(Account, Transaction.account_id == Account.id)
         .where(
             Transaction.workspace_id == workspace_id,
-            Account.is_closed == False,
             report_date >= start,
             report_date <= axis_end,
             Transaction.source != "opening_balance",
@@ -802,11 +800,9 @@ async def get_income_expenses_report(
             func.sum(amount_expr),
         )
         .select_from(Transaction)
-        .join(Account, Transaction.account_id == Account.id)
         .outerjoin(Category, Transaction.category_id == Category.id)
         .where(
             Transaction.workspace_id == workspace_id,
-            Account.is_closed == False,
             report_date >= start,
             report_date <= axis_end,
             Transaction.source != "opening_balance",
@@ -840,6 +836,7 @@ async def get_income_expenses_report(
         session, user_id, start, axis_end + timedelta(days=1),
         use_effective_date=accounting_mode == "accrual",
         primary_currency=primary_currency,
+        workspace_id=workspace_id,
     )
     for cat_uuid, offset_total in full_range_offset.items():
         cat_key = str(cat_uuid) if cat_uuid else "uncategorized"
@@ -865,11 +862,9 @@ async def get_income_expenses_report(
             func.sum(amount_expr),
         )
         .select_from(Transaction)
-        .join(Account, Transaction.account_id == Account.id)
         .join(Category, Transaction.category_id == Category.id)
         .where(
             Transaction.workspace_id == workspace_id,
-            Account.is_closed == False,
             report_date >= start,
             report_date <= axis_end,
             Transaction.source != "opening_balance",
@@ -905,11 +900,9 @@ async def get_income_expenses_report(
             func.sum(amount_expr),
         )
         .select_from(Transaction)
-        .join(Account, Transaction.account_id == Account.id)
         .outerjoin(Category, Transaction.category_id == Category.id)
         .where(
             Transaction.workspace_id == workspace_id,
-            Account.is_closed == False,
             report_date >= start,
             report_date <= axis_end,
             Transaction.source != "opening_balance",
@@ -1614,7 +1607,14 @@ async def get_cash_flow_report(
     # Forward walk: balance(d+1) = balance(d) + net_flow(d+1). Pending rows
     # already due are part of the projected starting position, not a second
     # dated flow in the future.
+    #
+    # The walk also tracks the runway: the first day the projected balance
+    # drops below zero, and the lowest point of the horizon. Both are taken
+    # from the daily walk so a dip inside a week or month still counts when
+    # the chart is aggregated to a coarser interval.
     running = current_balance + pending_current_delta
+    lowest_balance, lowest_balance_date = running, today
+    runway_date: date | None = today if running < 0 else None
     cursor_d = today
     while cursor_d < end:
         cursor_d = cursor_d + timedelta(days=1)
@@ -1623,6 +1623,10 @@ async def get_cash_flow_report(
         daily_balance[cursor_d] = running
         daily_inflow[cursor_d] = bucket["inflow"]
         daily_outflow[cursor_d] = bucket["outflow"]
+        if running < lowest_balance:
+            lowest_balance, lowest_balance_date = running, cursor_d
+        if runway_date is None and running < 0:
+            runway_date = cursor_d
 
     # 5. Aggregate to interval.
     points = _date_points(chart_start, end, interval)
@@ -1721,6 +1725,9 @@ async def get_cash_flow_report(
         forecast_start_date=_format_date_label(today, interval),
         baseline_active=baseline,
         baseline_lookback_days=baseline_lookback_days if baseline else None,
+        runway_date=runway_date.isoformat() if runway_date else None,
+        lowest_balance=round(lowest_balance, 2),
+        lowest_balance_date=lowest_balance_date.isoformat(),
     )
 
     composition: list[ReportCompositionItem] = []

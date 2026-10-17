@@ -345,10 +345,8 @@ async def get_summary(
             func.sum(case((Transaction.type == "credit", Transaction.amount), else_=0)),
             func.sum(case((Transaction.type == "debit", Transaction.amount), else_=0)),
         )
-        .join(Account, Transaction.account_id == Account.id)
         .where(
             Transaction.workspace_id == workspace_id,
-            Account.is_closed == False,
             report_date >= month_start,
             report_date < month_end,
             report_date <= today,
@@ -490,10 +488,8 @@ async def get_summary(
             func.sum(case((Transaction.type == "credit", Transaction.amount_primary), else_=0)),
             func.sum(case((Transaction.type == "debit", Transaction.amount_primary), else_=0)),
         )
-        .join(Account, Transaction.account_id == Account.id)
         .where(
             Transaction.workspace_id == workspace_id,
-            Account.is_closed == False,
             report_date >= month_start,
             report_date < month_end,
             report_date <= today,
@@ -742,15 +738,14 @@ async def get_spending_by_category(
             func.sum(_primary_amount_expr()),
         )
         .select_from(Transaction)
-        .join(Account, Transaction.account_id == Account.id)
         .outerjoin(Category, Transaction.category_id == Category.id)
         .where(
             Transaction.workspace_id == workspace_id,
-            Account.is_closed == False,
             Transaction.type == "debit",
             report_date >= month_start,
             report_date < month_end,
             report_date <= today,
+            Transaction.source != "opening_balance",
             Transaction.status == "posted",
             counts_as_user_pnl(),
             *acct_filter,
@@ -947,10 +942,8 @@ async def get_monthly_trend(
             func.sum(case((Transaction.type == "credit", primary_amt), else_=0)),
             func.sum(case((Transaction.type == "debit", primary_amt), else_=0)),
         )
-        .join(Account, Transaction.account_id == Account.id)
         .where(
             Transaction.workspace_id == workspace_id,
-            Account.is_closed == False,
             Transaction.source != "opening_balance",
             report_date <= today,
             Transaction.status == "posted",

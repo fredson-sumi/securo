@@ -1232,6 +1232,171 @@ async def test_simplefin_rekey_refuses_same_institution_ambiguity(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("existing", "feed", "expected", "expected_count"),
+    [
+        pytest.param(
+            [("c1", "Example Bank", "acct-old")],
+            [("c2", "Example Bank", "acct-new")],
+            [("acct-new", "c2")],
+            1,
+            id="relinked-bank-rekeys-account",
+        ),
+        pytest.param(
+            [("c1", "Example Bank", "acct-old")],
+            [("c2", "Other Bank", "acct-new")],
+            [("acct-old", "c1")],
+            2,
+            id="different-bank-does-not-rekey",
+        ),
+        pytest.param(
+            [("c1", "Example Bank", "acct-1"), ("c2", "Example Bank", "acct-2")],
+            [("c3", "Example Bank", "acct-new"), ("c2", "Example Bank", "acct-2")],
+            [("acct-new", "c3"), ("acct-2", "c2")],
+            2,
+            id="same-named-banks-do-not-cross-merge",
+        ),
+    ],
+)
+async def test_sync_simplefin_rekeys_account_of_relinked_bank(
+    session: AsyncSession, test_user, test_workspace,
+    existing, feed, expected, expected_count,
+):
+    conn = await _make_connection(session, test_user.id, "SimpleFIN")
+    conn.provider = "simplefin"
+    accounts = []
+    for index, (conn_id, bank_name, external_id) in enumerate(existing):
+        institution = Institution(
+            connection_id=conn.id, external_id=conn_id, name=bank_name
+        )
+        session.add(institution)
+        await session.flush()
+        accounts.append(Account(
+            user_id=test_user.id,
+            workspace_id=test_workspace.id,
+            connection_id=conn.id,
+            institution_id=institution.id,
+            external_id=external_id,
+            name="Savings (1234)",
+            display_name=f"My savings {index}",
+            type="savings",
+            balance=Decimal("100.00"),
+            currency="USD",
+        ))
+    session.add_all(accounts)
+    await session.commit()
+
+    mock_provider = AsyncMock()
+    mock_provider.refresh_credentials = AsyncMock(return_value={"token": "refreshed"})
+    mock_provider.get_accounts = AsyncMock(return_value=[
+        AccountData(
+            external_id=external_id,
+            name="Savings (1234)",
+            type="checking",
+            balance=Decimal("100.00"),
+            currency="USD",
+            institution_external_id=conn_id,
+            institution_name=bank_name,
+        )
+        for conn_id, bank_name, external_id in feed
+    ])
+    mock_provider.get_transactions = AsyncMock(return_value=[])
+
+    with patch("app.services.connection_service.get_provider", return_value=mock_provider), \
+         patch("app.services.connection_service.detect_transfer_pairs", new_callable=AsyncMock), \
+         patch("app.services.connection_service.stamp_primary_amount", new_callable=AsyncMock), \
+         patch("app.services.connection_service.apply_rules_to_transaction", new_callable=AsyncMock):
+        await sync_connection(session, conn.id, test_workspace.id, test_user.id)
+
+    synced = (await session.execute(
+        select(Account).where(Account.connection_id == conn.id)
+    )).scalars().all()
+    assert len(synced) == expected_count
+    for index, (account, (external_id, conn_id)) in enumerate(
+        zip(accounts, expected, strict=True)
+    ):
+        await session.refresh(account)
+        institution = await session.get(Institution, account.institution_id)
+        assert institution is not None
+        assert (account.external_id, institution.external_id) == (external_id, conn_id)
+        assert account.display_name == f"My savings {index}"
+        assert account.type == "savings"
+
+
+@pytest.mark.asyncio
+async def test_sync_simplefin_second_login_does_not_adopt_an_absent_account(
+    session: AsyncSession, test_user, test_workspace,
+):
+    """A same-named bank that arrives while the old one is still in the pull is
+    a second login, not a re-link.
+
+    SimpleFIN gives no account number, and two logins at one bank carry the
+    same institution name, so the only thing separating the two situations is
+    whether the old conn_id is still being served. Here it is: c1 still sends
+    its checking account. The savings row is missing only because that one
+    sub-connection is erroring, which is routine. Adopting it for c2 would
+    point the user's row, the name they gave it and its whole history at a
+    different login's feed.
+    """
+    conn = await _make_connection(session, test_user.id, "SimpleFIN")
+    conn.provider = "simplefin"
+    institution = Institution(
+        connection_id=conn.id, external_id="c1", name="Example Bank"
+    )
+    session.add(institution)
+    await session.flush()
+    savings = Account(
+        user_id=test_user.id, workspace_id=test_workspace.id, connection_id=conn.id,
+        institution_id=institution.id, external_id="acct-old", name="Savings (1234)",
+        display_name="My personal savings", type="savings",
+        balance=Decimal("100.00"), currency="USD",
+    )
+    checking = Account(
+        user_id=test_user.id, workspace_id=test_workspace.id, connection_id=conn.id,
+        institution_id=institution.id, external_id="acct-c1-checking",
+        name="Checking (9999)", type="checking",
+        balance=Decimal("50.00"), currency="USD",
+    )
+    session.add_all([savings, checking])
+    await session.commit()
+
+    mock_provider = AsyncMock()
+    mock_provider.refresh_credentials = AsyncMock(return_value={"token": "refreshed"})
+    mock_provider.get_accounts = AsyncMock(return_value=[
+        AccountData(
+            external_id="acct-c1-checking", name="Checking (9999)", type="checking",
+            balance=Decimal("50.00"), currency="USD",
+            institution_external_id="c1", institution_name="Example Bank",
+        ),
+        AccountData(
+            external_id="acct-new", name="Savings (1234)", type="checking",
+            balance=Decimal("7777.00"), currency="USD",
+            institution_external_id="c2", institution_name="Example Bank",
+        ),
+    ])
+    mock_provider.get_transactions = AsyncMock(return_value=[])
+
+    with patch("app.services.connection_service.get_provider", return_value=mock_provider), \
+         patch("app.services.connection_service.detect_transfer_pairs", new_callable=AsyncMock), \
+         patch("app.services.connection_service.stamp_primary_amount", new_callable=AsyncMock), \
+         patch("app.services.connection_service.apply_rules_to_transaction", new_callable=AsyncMock):
+        await sync_connection(session, conn.id, test_workspace.id, test_user.id)
+
+    await session.refresh(savings)
+    assert savings.external_id == "acct-old"
+    assert savings.display_name == "My personal savings"
+    assert savings.balance == Decimal("100.00")
+    accounts = (await session.execute(
+        select(Account).where(Account.connection_id == conn.id)
+    )).scalars().all()
+    assert len(accounts) == 3
+    adopted = next(a for a in accounts if a.external_id == "acct-new")
+    adopted_institution = await session.get(Institution, adopted.institution_id)
+    assert adopted_institution is not None
+    assert adopted_institution.external_id == "c2"
+
+
+@pytest.mark.asyncio
 async def test_sync_upserts_matching_csv_import_without_overwriting_user_fields(
     session: AsyncSession, test_user, test_workspace,
 ):
@@ -1529,6 +1694,152 @@ async def test_phantom_cleanup_leaves_a_closed_accounts_opening_balance_alone(
         select(Transaction).where(Transaction.account_id == account_id)
     )).scalars().all()
     assert [row.external_id for row in rows] == ["paired"]
+
+
+@pytest.mark.asyncio
+async def test_phantom_cleanup_keeps_a_same_day_repeat_the_provider_still_returns(
+    session: AsyncSession, test_user, test_workspace
+):
+    """Two real same-day transfers of the same amount, only one of them paired.
+    The provider still returns both ids, so the unpaired one is not a phantom
+    and the cleanup must keep it (#1038). A later sync whose fetch window no
+    longer reaches them must keep it too.
+    """
+    conn = await _make_connection(session, test_user.id, "Repeat Bank")
+
+    account = Account(
+        id=uuid.uuid4(), user_id=test_user.id, workspace_id=test_workspace.id,
+        connection_id=conn.id, external_id="repeat-acc-1", name="Checking",
+        type="checking", balance=Decimal("50000"), currency="BRL",
+    )
+    session.add(account)
+    await session.flush()
+    account_id = account.id
+
+    payment_day = date.today()
+    for external_id, pair in (
+        ("pix-to-nubank", uuid.uuid4()),
+        ("pix-to-mercado-pago", None),
+    ):
+        session.add(Transaction(
+            id=uuid.uuid4(), user_id=test_user.id, workspace_id=test_workspace.id,
+            account_id=account_id, external_id=external_id,
+            description="Pix enviado Own Name", amount=Decimal("10000.00"),
+            date=payment_day, type="debit", status="posted", source="sync",
+            currency="BRL", transfer_pair_id=pair,
+            created_at=datetime.now(timezone.utc),
+        ))
+    await session.commit()
+
+    mock_provider = AsyncMock()
+    mock_provider.refresh_credentials = AsyncMock(return_value={"token": "t"})
+    mock_provider.get_accounts = AsyncMock(return_value=[
+        AccountData(
+            external_id="repeat-acc-1", name="Checking", type="checking",
+            balance=Decimal("50000"), currency="BRL",
+        ),
+    ])
+    mock_provider.get_transactions = AsyncMock(return_value=[
+        TransactionData(
+            external_id=external_id, description="Pix enviado Own Name",
+            amount=Decimal("10000.00"), date=payment_day, type="debit",
+            currency="BRL", status="posted",
+        )
+        for external_id in ("pix-to-nubank", "pix-to-mercado-pago")
+    ])
+
+    async def synced_ids() -> set[str | None]:
+        rows = (await session.execute(
+            select(Transaction).where(
+                Transaction.account_id == account_id,
+                Transaction.source == "sync",
+            )
+        )).scalars().all()
+        return {row.external_id for row in rows}
+
+    with patch("app.services.connection_service.get_provider", return_value=mock_provider), \
+         patch("app.services.connection_service.detect_transfer_pairs", new_callable=AsyncMock), \
+         patch("app.services.connection_service.stamp_primary_amount", new_callable=AsyncMock), \
+         patch("app.services.connection_service.apply_rules_to_transaction", new_callable=AsyncMock):
+        await sync_connection(session, conn.id, test_workspace.id, test_user.id)
+        assert await synced_ids() == {"pix-to-nubank", "pix-to-mercado-pago"}
+
+        # Two weeks on, the incremental fetch no longer returns either id.
+        mock_provider.get_transactions = AsyncMock(return_value=[])
+        await sync_connection(session, conn.id, test_workspace.id, test_user.id)
+        assert await synced_ids() == {"pix-to-nubank", "pix-to-mercado-pago"}
+
+
+@pytest.mark.asyncio
+async def test_phantom_cleanup_counts_a_returned_pending_id_with_import_pending_off(
+    session: AsyncSession, test_user, test_workspace
+):
+    """With import_pending off the sync skips pending rows, but the provider
+    still returned them. A pending row stored before the setting changed, whose
+    id the provider still returns next to a paired same-day sibling, is a real
+    repeat and the cleanup must keep it.
+    """
+    conn = await _make_connection(
+        session, test_user.id, "Pending Bank", settings={"import_pending": False}
+    )
+
+    account = Account(
+        id=uuid.uuid4(), user_id=test_user.id, workspace_id=test_workspace.id,
+        connection_id=conn.id, external_id="pending-acc-1", name="Checking",
+        type="checking", balance=Decimal("50000"), currency="BRL",
+    )
+    session.add(account)
+    await session.flush()
+    account_id = account.id
+
+    payment_day = date.today()
+    for external_id, status, pair in (
+        ("pix-to-nubank", "posted", uuid.uuid4()),
+        ("pix-to-mercado-pago", "pending", None),
+    ):
+        session.add(Transaction(
+            id=uuid.uuid4(), user_id=test_user.id, workspace_id=test_workspace.id,
+            account_id=account_id, external_id=external_id,
+            description="Pix enviado Own Name", amount=Decimal("10000.00"),
+            date=payment_day, type="debit", status=status, source="sync",
+            currency="BRL", transfer_pair_id=pair,
+            created_at=datetime.now(timezone.utc),
+        ))
+    await session.commit()
+
+    mock_provider = AsyncMock()
+    mock_provider.refresh_credentials = AsyncMock(return_value={"token": "t"})
+    mock_provider.get_accounts = AsyncMock(return_value=[
+        AccountData(
+            external_id="pending-acc-1", name="Checking", type="checking",
+            balance=Decimal("50000"), currency="BRL",
+        ),
+    ])
+    mock_provider.get_transactions = AsyncMock(return_value=[
+        TransactionData(
+            external_id=external_id, description="Pix enviado Own Name",
+            amount=Decimal("10000.00"), date=payment_day, type="debit",
+            currency="BRL", status=status,
+        )
+        for external_id, status in (
+            ("pix-to-nubank", "posted"),
+            ("pix-to-mercado-pago", "pending"),
+        )
+    ])
+
+    with patch("app.services.connection_service.get_provider", return_value=mock_provider), \
+         patch("app.services.connection_service.detect_transfer_pairs", new_callable=AsyncMock), \
+         patch("app.services.connection_service.stamp_primary_amount", new_callable=AsyncMock), \
+         patch("app.services.connection_service.apply_rules_to_transaction", new_callable=AsyncMock):
+        await sync_connection(session, conn.id, test_workspace.id, test_user.id)
+
+    rows = (await session.execute(
+        select(Transaction).where(
+            Transaction.account_id == account_id,
+            Transaction.source == "sync",
+        )
+    )).scalars().all()
+    assert {row.external_id for row in rows} == {"pix-to-nubank", "pix-to-mercado-pago"}
 
 
 @pytest.mark.asyncio

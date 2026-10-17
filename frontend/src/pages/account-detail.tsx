@@ -17,6 +17,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { ArrowLeft, ArrowLeftRight, CalendarClock, ChevronLeft, ChevronRight, Clock, EyeClosed, HelpCircle, Paperclip, Pencil, Plus, X } from 'lucide-react'
 import { MobileTransactionRow } from '@/components/mobile-transaction-row'
+import { transactionDescription } from '@/lib/transaction-description'
 import { CategoryIcon } from '@/components/category-icon'
 import { ProjectedTransactionBadge } from '@/components/projected-transaction-badge'
 import { TransactionDialog, type TransactionSavePayload } from '@/components/transaction-dialog'
@@ -1575,6 +1576,7 @@ export default function AccountDetailPage() {
                       userCurrency={userCurrency}
                       onSelect={() => {}}
                       showPayee
+                      localizeOpeningBalance
                       onClick={(clickedTx) => {
                         // The opening-balance row is synthetic; the desktop
                         // table makes it non-clickable and mobile must match.
@@ -1623,13 +1625,8 @@ export default function AccountDetailPage() {
                         </td>
                         <td className="px-3 sm:px-4 py-3 w-full max-w-0">
                           <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="font-semibold text-foreground text-sm truncate">{tx.description}</span>
+                            <span className="font-semibold text-foreground text-sm truncate">{transactionDescription(tx.description, tx.source, t)}</span>
                             <div className="flex items-center gap-1 shrink-0">
-                            {isOpening && (
-                              <span className="ml-2 text-xs text-muted-foreground font-normal border border-border rounded px-1.5 py-0.5">
-                                {t('accounts.openingBalance')}
-                              </span>
-                            )}
                             {isTransfer && (
                               <span className="ml-2 inline-flex items-center gap-1 text-xs text-blue-600 font-normal bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5">
                                 <ArrowLeftRight className="h-3 w-3" />

@@ -1318,6 +1318,7 @@ async def _find_existing_connected_account(
     acc_data: AccountData,
     institution: Optional[Institution],
     incoming_external_ids: set[str],
+    incoming_institution_external_ids: frozenset[str] = frozenset(),
 ) -> Optional[Account]:
     """Find an existing account for incoming provider account data.
 
@@ -1357,6 +1358,29 @@ async def _find_existing_connected_account(
             candidate for candidate in candidates
             if candidate.institution_id == institution.id
         ]
+        if not matched_institution and candidates:
+            # Re-linking a bank in SimpleFIN Bridge can send it under a new
+            # conn_id, so _resolve_institution just minted a fresh row while
+            # the account still points at the old, same-named one.
+            #
+            # Only a conn_id this pull no longer carries can have been
+            # re-linked. A bank still listed under its own conn_id was not,
+            # so a same-named one arriving beside it is a second login at
+            # that bank (SimpleFIN has no account number to tell them apart,
+            # and two logins at one bank share its name). Adopting its
+            # account would point the user's existing row, display name and
+            # history at the other login's feed.
+            same_name_ids = set((await session.execute(
+                select(Institution.id).where(
+                    Institution.connection_id == connection.id,
+                    Institution.name == institution.name,
+                    Institution.external_id.not_in(incoming_institution_external_ids),
+                )
+            )).scalars().all())
+            matched_institution = [
+                candidate for candidate in candidates
+                if candidate.institution_id in same_name_ids
+            ]
         if matched_institution:
             candidates = matched_institution
         else:
@@ -1588,6 +1612,7 @@ async def _find_synced_duplicate(
 async def _cleanup_phantom_duplicates(
     session: AsyncSession,
     connection_id: uuid.UUID,
+    live_external_ids: Optional[dict[uuid.UUID, set[str]]] = None,
 ) -> set[uuid.UUID]:
     """Delete synced transactions that are phantom duplicates.
 
@@ -1601,6 +1626,15 @@ async def _cleanup_phantom_duplicates(
     within ±1 day. The pairing of the sibling is the safety signal that lets
     us distinguish the duplicate from a legitimate same-day repeat (e.g. two
     real Uber rides for the same fare).
+
+    ``live_external_ids`` maps an account id to the transaction ids the
+    provider returned for it in this sync. For an account in that map, a
+    sibling with a different id marks the tx as a phantom only when exactly
+    one of the two ids is still returned, which is what a re-keyed twin looks
+    like. Both ids returned means two real payments (e.g. two same-day Pix of
+    the same amount, #1038). Neither returned means the rows have left the
+    provider's fetch window, so this sync has no evidence about them, and they
+    were already checked while they were in it.
 
     Returns the ids of the accounts that lost a row, so the caller can
     reconcile their opening balances against what is left.
@@ -1623,6 +1657,7 @@ async def _cleanup_phantom_duplicates(
 
     touched: set[uuid.UUID] = set()
     for tx in unmatched:
+        live = (live_external_ids or {}).get(tx.account_id)
         date_lo = tx.date - timedelta(days=1)
         date_hi = tx.date + timedelta(days=1)
         sibling_result = await session.execute(
@@ -1638,6 +1673,12 @@ async def _cleanup_phantom_duplicates(
             )
         )
         for sibling in sibling_result.scalars():
+            if (
+                live is not None
+                and tx.external_id != sibling.external_id
+                and (tx.external_id in live) == (sibling.external_id in live)
+            ):
+                continue
             if token_overlap(
                 sibling.original_description or sibling.description,
                 tx.original_description or tx.description,
@@ -1973,8 +2014,14 @@ async def sync_connection(
         user_currency = user.primary_currency if user else get_settings().default_currency
         new_tx_ids: list[uuid.UUID] = []
         merged_count = 0
+        live_txn_external_ids: dict[uuid.UUID, set[str]] = {}
         accounts_data = await provider.get_accounts(credentials)
         incoming_external_ids = {acc.external_id for acc in accounts_data}
+        incoming_institution_external_ids = frozenset(
+            acc.institution_external_id
+            for acc in accounts_data
+            if acc.institution_external_id
+        )
         institution_cache: dict[str, Institution] = {}
         for acc_data in accounts_data:
             institution = await _resolve_institution(
@@ -1986,6 +2033,7 @@ async def sync_connection(
                 acc_data,
                 institution,
                 incoming_external_ids,
+                incoming_institution_external_ids,
             )
 
             if account is not None:
@@ -2114,6 +2162,11 @@ async def sync_connection(
                 credentials, acc_data.external_id, since, payee_source=payee_source
             )
 
+            # Every id the provider returned, pending ones included, so the
+            # phantom cleanup still sees a pending row the filter below skips.
+            live_txn_external_ids[account.id] = {
+                txn.external_id for txn in transactions_data
+            }
             if not import_pending:
                 transactions_data = [t for t in transactions_data if t.status != "pending"]
 
@@ -2389,7 +2442,9 @@ async def sync_connection(
         # Clean up phantom duplicates: providers occasionally double-report the
         # same payment with different ids. Once transfer detection has paired
         # the real one, the orphan twin gets removed here.
-        touched_account_ids = await _cleanup_phantom_duplicates(session, connection.id)
+        touched_account_ids = await _cleanup_phantom_duplicates(
+            session, connection.id, live_txn_external_ids
+        )
 
         # The opening balances above were reconciled with the phantoms still
         # counted. Reconcile the open accounts that lost one again, so the
