@@ -68,14 +68,122 @@ class FailingProvider(BenchmarkProvider):
         raise BenchmarkProviderError("upstream failed")
 
 
+@pytest.fixture
+def every_symbol_charted(monkeypatch):
+    monkeypatch.setattr(
+        YahooBenchmarkProvider,
+        "_symbols_with_history_sync",
+        staticmethod(lambda symbols: set(symbols)),
+    )
+
+
 @pytest.mark.asyncio
-async def test_yahoo_search_keeps_only_indices():
-    provider = YahooBenchmarkProvider(FakeMarketProvider())
+async def test_yahoo_search_keeps_every_priced_instrument_type(every_symbol_charted):
+    class MixedMarketProvider(FakeMarketProvider):
+        async def search(self, query: str, limit: int = 20) -> list[MarketSymbolMatch]:
+            return [
+                *await super().search(query, limit),
+                MarketSymbolMatch(
+                    symbol="BTC-USD", name="Bitcoin USD", quote_type="CRYPTOCURRENCY"
+                ),
+                MarketSymbolMatch(symbol="ACME=F", name="Acme Futures", quote_type="FUTURE"),
+                MarketSymbolMatch(symbol="ACME260619C1", name="Acme Call", quote_type="OPTION"),
+            ]
+
+    provider = YahooBenchmarkProvider(MixedMarketProvider())
     results = await provider.search("acme")
-    assert [(item.symbol, item.provider) for item in results] == [("^ACME", "yahoo")]
+    assert [(item.symbol, item.provider) for item in results] == [
+        ("ACME", "yahoo"),
+        ("^ACME", "yahoo"),
+        ("ACME-ETF", "yahoo"),
+        ("BTC-USD", "yahoo"),
+    ]
 
 
-def test_yahoo_typed_lookup_parses_only_index_documents(monkeypatch):
+@pytest.mark.asyncio
+async def test_yahoo_search_drops_symbols_without_history(monkeypatch):
+    checked: list[list[str]] = []
+
+    def symbols_with_history(symbols: list[str]) -> set[str]:
+        checked.append(symbols)
+        return {"ACME", "ACME-ETF"}
+
+    monkeypatch.setattr(
+        YahooBenchmarkProvider, "_symbols_with_history_sync", staticmethod(symbols_with_history)
+    )
+    results = await YahooBenchmarkProvider(FakeMarketProvider()).search("acme")
+    assert [item.symbol for item in results] == ["ACME", "ACME-ETF"]
+    assert checked == [["ACME", "^ACME", "ACME-ETF"]]
+
+
+def test_yahoo_history_check_runs_in_batches_until_the_limit_is_filled(monkeypatch):
+    candidates = [
+        BenchmarkMatch(symbol=f"S{index}", name=f"S{index}", provider="yahoo")
+        for index in range(45)
+    ]
+    batches: list[list[str]] = []
+
+    def symbols_with_history(symbols: list[str]) -> set[str]:
+        batches.append(symbols)
+        # Only every other symbol has a history.
+        return {symbol for symbol in symbols if int(symbol[1:]) % 2 == 0}
+
+    monkeypatch.setattr(
+        YahooBenchmarkProvider, "_symbols_with_history_sync", staticmethod(symbols_with_history)
+    )
+    kept = YahooBenchmarkProvider._keep_charted_sync(candidates, 15)
+    assert [item.symbol for item in kept] == [f"S{index}" for index in range(0, 30, 2)]
+    assert [len(batch) for batch in batches] == [20, 20]
+
+
+def test_yahoo_history_check_failure_keeps_results_unchecked(monkeypatch):
+    def failing_check(symbols: list[str]) -> set[str]:
+        raise BenchmarkProviderError("spark unavailable")
+
+    monkeypatch.setattr(
+        YahooBenchmarkProvider, "_symbols_with_history_sync", staticmethod(failing_check)
+    )
+    candidates = [BenchmarkMatch(symbol="^GSPC", name="S&P 500", provider="yahoo")]
+    assert YahooBenchmarkProvider._keep_charted_sync(candidates, 15) == candidates
+
+
+@pytest.mark.asyncio
+async def test_yahoo_history_check_rate_limit_fails_the_search(monkeypatch):
+    def rate_limited(symbols: list[str]) -> set[str]:
+        raise BenchmarkRateLimitedError("slow down")
+
+    monkeypatch.setattr(
+        YahooBenchmarkProvider, "_symbols_with_history_sync", staticmethod(rate_limited)
+    )
+    with pytest.raises(BenchmarkRateLimitedError):
+        await YahooBenchmarkProvider(FakeMarketProvider()).search("acme")
+
+
+def test_yahoo_history_check_needs_two_closes(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            # Shape of Yahoo's spark response: an index quoted without
+            # history returns one point, an unknown symbol is left out.
+            return {
+                "^GSPC": {"symbol": "^GSPC", "timestamp": [1, 2, 3], "close": [1.0, 2.0, 3.0]},
+                "^SPBTCFU": {"symbol": "^SPBTCFU", "timestamp": [1], "close": [563.9]},
+            }
+
+    class FakeYfData:
+        def get(self, url, params, timeout):
+            assert params["symbols"] == "^GSPC,^SPBTCFU,NOPE"
+            assert params["interval"] == "1d"
+            return FakeResponse()
+
+    monkeypatch.setattr("yfinance.data.YfData", FakeYfData)
+    assert YahooBenchmarkProvider._symbols_with_history_sync(["^GSPC", "^SPBTCFU", "NOPE"]) == {
+        "^GSPC"
+    }
+
+
+def test_yahoo_lookup_parses_priced_instrument_documents(monkeypatch):
     class FakeResponse:
         status_code = 200
 
@@ -97,6 +205,12 @@ def test_yahoo_typed_lookup_parses_only_index_documents(monkeypatch):
                                     "exchange": "PCX",
                                     "quoteType": "etf",
                                 },
+                                {
+                                    "symbol": "ES=F",
+                                    "shortName": "E-Mini S&P 500",
+                                    "exchange": "CME",
+                                    "quoteType": "future",
+                                },
                             ]
                         }
                     ]
@@ -106,18 +220,14 @@ def test_yahoo_typed_lookup_parses_only_index_documents(monkeypatch):
     class FakeYfData:
         def get(self, url, params, timeout):
             assert params["query"] == "500"
-            assert params["type"] == "index"
+            assert params["type"] == "all"
             return FakeResponse()
 
     monkeypatch.setattr("yfinance.data.YfData", FakeYfData)
     results = YahooBenchmarkProvider._lookup_sync("500", 15)
     assert results == [
-        BenchmarkMatch(
-            symbol="^GSPC",
-            name="S&P 500",
-            exchange="SNP",
-            provider="yahoo",
-        )
+        BenchmarkMatch(symbol="^GSPC", name="S&P 500", exchange="SNP", provider="yahoo"),
+        BenchmarkMatch(symbol="SPY", name="SPDR S&P 500 ETF", exchange="PCX", provider="yahoo"),
     ]
 
 

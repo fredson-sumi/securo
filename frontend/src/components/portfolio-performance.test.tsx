@@ -218,7 +218,7 @@ describe('PortfolioPerformance', () => {
     expect(readLastSelection(workspaceId)?.period).toBe('3m')
   })
 
-  it('supports keyboard benchmark selection and removal at the five-index limit', async () => {
+  it('supports keyboard benchmark selection and removal at the five-benchmark limit', async () => {
     writeBenchmarkSelections(workspaceId, benchmarks.slice(0, 4))
     const { user } = renderPerformance()
     await screen.findByText('+12.50%')
@@ -227,7 +227,7 @@ describe('PortfolioPerformance', () => {
     await user.keyboard('{Enter}')
     const dialog = screen.getByRole('dialog', { name: 'Benchmarks' })
     const search = within(dialog).getByRole('textbox', {
-      name: 'Search an index by name or symbol…',
+      name: 'Search an index, ETF, stock or crypto by name or symbol…',
     })
     expect(search).toHaveFocus()
     await user.type(search, 'Ibov')
@@ -240,7 +240,7 @@ describe('PortfolioPerformance', () => {
     await user.keyboard('{Enter}')
 
     expect(
-      within(dialog).getByText('Up to five indices can be compared at once.'),
+      within(dialog).getByText('Up to five benchmarks can be compared at once.'),
     ).toBeInTheDocument()
     expect(within(dialog).queryByRole('textbox')).not.toBeInTheDocument()
     expect(readBenchmarkSelections(workspaceId)).toEqual(benchmarks)

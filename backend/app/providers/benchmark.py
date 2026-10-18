@@ -35,6 +35,15 @@ BCB_SGS_SOAP_URL = "https://www3.bcb.gov.br/wssgs/services/FachadaWSSGS"
 BCB_SGS_URL = "https://api.bcb.gov.br/dados/serie/bcdata.sgs.{series}/dados"
 IPEADATA_SERIES_URL = "https://www.ipeadata.gov.br/api/odata4/ValoresSerie(SERCODIGO='{series}')"
 YAHOO_LOOKUP_URL = "https://query2.finance.yahoo.com/v1/finance/lookup"
+YAHOO_SPARK_URL = "https://query1.finance.yahoo.com/v8/finance/spark"
+# Instruments with a daily close series a portfolio can be measured against.
+# Futures are left out because their continuous series jumps at each contract
+# roll, and options expire.
+YAHOO_BENCHMARK_QUOTE_TYPES = frozenset(
+    {"INDEX", "ETF", "MUTUALFUND", "EQUITY", "CRYPTOCURRENCY", "CURRENCY"}
+)
+# Symbols per spark request; Yahoo rejects larger batches.
+YAHOO_SPARK_BATCH_SIZE = 20
 
 
 @dataclass(frozen=True)
@@ -64,48 +73,111 @@ class BenchmarkProvider:
 
 
 class YahooBenchmarkProvider(BenchmarkProvider):
-    """Dynamic index discovery and adjusted historical closes from Yahoo."""
+    """Benchmark discovery and adjusted historical closes from Yahoo.
+
+    Anything with a daily price history can be a benchmark: indices, ETFs,
+    funds, stocks, crypto and currencies. Many indices (S&P, Cboe and MSCI
+    license theirs) are quoted on Yahoo without any history, so search
+    results are checked against a short price series and dropped when Yahoo
+    has none, rather than offered and then failing on the chart.
+    """
 
     name = "yahoo"
 
     def __init__(self, market_provider: Optional[MarketPriceProvider] = None) -> None:
         # An override keeps the provider independently testable and allows an
         # installation to reuse another market search implementation. The
-        # default uses Yahoo's typed lookup endpoint: its generic autocomplete
-        # often returns only futures for searches such as "500" or "Nasdaq".
+        # default uses Yahoo's lookup endpoint: its generic autocomplete often
+        # returns only futures for searches such as "500" or "Nasdaq".
         self.market_provider = market_provider
 
     async def search(self, query: str, limit: int = 15) -> list[BenchmarkMatch]:
+        # Ask for extra candidates: unsupported types and symbols without
+        # history are filtered out below.
+        candidate_limit = min(max(limit * 3, 30), 80)
         try:
             if self.market_provider is None:
-                return await asyncio.to_thread(self._lookup_sync, query, limit)
-
-            # Custom market searches may mix equities, funds and indices. Ask
-            # for extra candidates and retain only real INDEX results.
-            matches = await self.market_provider.search(query, limit=min(max(limit * 4, 20), 80))
+                candidates = await asyncio.to_thread(self._lookup_sync, query, candidate_limit)
+            else:
+                matches = await self.market_provider.search(query, limit=candidate_limit)
+                candidates = [
+                    BenchmarkMatch(
+                        symbol=match.symbol,
+                        name=match.name or match.symbol,
+                        exchange=match.exchange,
+                        provider=self.name,
+                    )
+                    for match in matches
+                    if (match.quote_type or "").upper() in YAHOO_BENCHMARK_QUOTE_TYPES
+                ]
+            return await asyncio.to_thread(self._keep_charted_sync, candidates, limit)
         except MarketPriceRateLimitedError as exc:
             raise BenchmarkRateLimitedError(str(exc)) from exc
         except _rate_limit_exception_types() as exc:
-            raise BenchmarkRateLimitedError("Yahoo Finance rate-limited index search") from exc
+            raise BenchmarkRateLimitedError("Yahoo Finance rate-limited benchmark search") from exc
         except BenchmarkProviderError:
             raise
         except Exception as exc:  # pragma: no cover - upstream/network drift
             logger.warning("Yahoo benchmark search failed for %r: %s", query, exc)
-            raise BenchmarkProviderError("Could not search Yahoo Finance indices") from exc
-        return [
-            BenchmarkMatch(
-                symbol=match.symbol,
-                name=match.name or match.symbol,
-                exchange=match.exchange,
-                provider=self.name,
+            raise BenchmarkProviderError("Could not search Yahoo Finance benchmarks") from exc
+
+    @classmethod
+    def _keep_charted_sync(
+        cls, candidates: list[BenchmarkMatch], limit: int
+    ) -> list[BenchmarkMatch]:
+        """The first ``limit`` candidates Yahoo has a price history for.
+
+        Candidates are checked in batches, in ranking order, until enough are
+        kept. If the check itself fails the batch is kept unchecked: the chart
+        still reports a symbol without history, and search keeps working.
+        """
+        kept: list[BenchmarkMatch] = []
+        for offset in range(0, len(candidates), YAHOO_SPARK_BATCH_SIZE):
+            batch = candidates[offset : offset + YAHOO_SPARK_BATCH_SIZE]
+            try:
+                charted = cls._symbols_with_history_sync([match.symbol for match in batch])
+            except BenchmarkRateLimitedError:
+                raise
+            except Exception as exc:
+                logger.warning("Yahoo history check failed; keeping results unchecked: %s", exc)
+                charted = {match.symbol for match in batch}
+            kept.extend(match for match in batch if match.symbol in charted)
+            if len(kept) >= limit:
+                break
+        return kept[:limit]
+
+    @staticmethod
+    def _symbols_with_history_sync(symbols: list[str]) -> set[str]:
+        """Which symbols have at least two daily closes over the past month.
+
+        One spark request covers the whole batch. A symbol Yahoo only quotes
+        returns a single point; an unknown one is missing from the response.
+        """
+        from yfinance.data import YfData
+
+        response = YfData().get(
+            YAHOO_SPARK_URL,
+            params={"symbols": ",".join(symbols), "range": "1mo", "interval": "1d"},
+            timeout=30,
+        )
+        if response.status_code == 429:
+            raise BenchmarkRateLimitedError("Yahoo Finance rate-limited the history check")
+        if response.status_code >= 400:
+            raise BenchmarkProviderError(
+                f"Yahoo Finance history check returned HTTP {response.status_code}"
             )
-            for match in matches
-            if (match.quote_type or "").upper() == "INDEX"
-        ][:limit]
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise BenchmarkProviderError("Yahoo Finance history check returned no symbols")
+        return {
+            symbol
+            for symbol, series in payload.items()
+            if isinstance(series, dict) and len(series.get("timestamp") or []) >= 2
+        }
 
     @staticmethod
     def _lookup_sync(query: str, limit: int) -> list[BenchmarkMatch]:
-        """Search Yahoo's instrument lookup with an upstream INDEX filter."""
+        """Search Yahoo's instrument lookup, keeping benchmark-able types."""
         from yfinance.data import YfData
 
         normalized = (query or "").strip()
@@ -118,17 +190,17 @@ class YahooBenchmarkProvider(BenchmarkProvider):
                 "lang": "en-US",
                 "region": "US",
                 "query": normalized,
-                "type": "index",
+                "type": "all",
                 "count": min(max(limit, 15), 80),
                 "start": 0,
             },
             timeout=30,
         )
         if response.status_code == 429:
-            raise BenchmarkRateLimitedError("Yahoo Finance rate-limited index search")
+            raise BenchmarkRateLimitedError("Yahoo Finance rate-limited benchmark search")
         if response.status_code >= 400:
             raise BenchmarkProviderError(
-                f"Yahoo Finance index search returned HTTP {response.status_code}"
+                f"Yahoo Finance benchmark search returned HTTP {response.status_code}"
             )
         payload = response.json()
         result_sets = payload.get("finance", {}).get("result") or []
@@ -145,7 +217,7 @@ class YahooBenchmarkProvider(BenchmarkProvider):
         for document in documents:
             symbol = str(document.get("symbol") or "").strip()
             quote_type = str(document.get("quoteType") or "").upper()
-            if not symbol or quote_type != "INDEX" or symbol in seen:
+            if not symbol or quote_type not in YAHOO_BENCHMARK_QUOTE_TYPES or symbol in seen:
                 continue
             seen.add(symbol)
             matches.append(

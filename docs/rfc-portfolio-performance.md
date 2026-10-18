@@ -22,8 +22,12 @@ compares it with any market index the user searches for.
 - A period picker (3m, 6m, YTD, 1y, 3y, 5y) and a scope: the whole portfolio
   or any mix of wallets and individual holdings. Named selections can be saved
   as views.
-- Up to five benchmarks, found by searching (Yahoo indices plus the B3 Índice
-  DI). Each gets its own line, final return and excess over the portfolio.
+- Up to five benchmarks, found by searching: anything Yahoo has a daily price
+  history for (indices, ETFs, funds, stocks, crypto, currencies) plus the B3
+  Índice DI. Futures are left out because their series jumps at each contract
+  roll, and indices Yahoo only quotes without history (many S&P, Cboe and
+  MSCI ones) are dropped from the results. Each gets its own line, final
+  return and excess over the portfolio.
 - Dragging across the chart shows the return between any two dates.
 - If a benchmark's data source fails, only that benchmark shows an error with
   a retry button. The portfolio's own return is always shown.
