@@ -169,6 +169,11 @@ class YahooBenchmarkProvider(BenchmarkProvider):
         payload = response.json()
         if not isinstance(payload, dict):
             raise BenchmarkProviderError("Yahoo Finance history check returned no symbols")
+        # Unknown symbols are left out, so an empty payload is a valid answer.
+        # One keyed by none of the requested symbols means the format changed:
+        # fail the check rather than drop every result.
+        if payload and set(symbols).isdisjoint(payload):
+            raise BenchmarkProviderError("Yahoo Finance history check returned an unknown format")
         return {
             symbol
             for symbol, series in payload.items()

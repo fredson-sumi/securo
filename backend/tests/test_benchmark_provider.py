@@ -183,6 +183,39 @@ def test_yahoo_history_check_needs_two_closes(monkeypatch):
     }
 
 
+def fake_spark(monkeypatch, payload):
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return payload
+
+    class FakeYfData:
+        def get(self, url, params, timeout):
+            return FakeResponse()
+
+    monkeypatch.setattr("yfinance.data.YfData", FakeYfData)
+
+
+def test_yahoo_history_check_accepts_only_unknown_symbols(monkeypatch):
+    # Every symbol unknown: Yahoo leaves them all out of an empty payload.
+    fake_spark(monkeypatch, {})
+    assert YahooBenchmarkProvider._symbols_with_history_sync(["NOPE", "NADA"]) == set()
+
+
+def test_yahoo_history_check_in_an_unknown_format_keeps_results_unchecked(monkeypatch):
+    # A 200 keyed by none of the requested symbols means the format changed.
+    fake_spark(monkeypatch, {"spark": {"result": [], "error": None}})
+    with pytest.raises(BenchmarkProviderError):
+        YahooBenchmarkProvider._symbols_with_history_sync(["^GSPC", "IBIT"])
+
+    candidates = [
+        BenchmarkMatch(symbol="^GSPC", name="S&P 500", provider="yahoo"),
+        BenchmarkMatch(symbol="IBIT", name="iShares Bitcoin Trust ETF", provider="yahoo"),
+    ]
+    assert YahooBenchmarkProvider._keep_charted_sync(candidates, 15) == candidates
+
+
 def test_yahoo_lookup_parses_priced_instrument_documents(monkeypatch):
     class FakeResponse:
         status_code = 200
