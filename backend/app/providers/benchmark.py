@@ -597,9 +597,12 @@ class CompositeBenchmarkProvider:
         yahoo: Optional[BenchmarkProvider] = None,
         di_b3: Optional[BenchmarkProvider] = None,
     ) -> None:
+        # Search results follow this order before they are cut to the limit.
+        # The curated Índice DI comes first: a short query such as "di" or
+        # "cdi" fills every slot with Yahoo symbols and would push it out.
         self.providers: dict[str, BenchmarkProvider] = {
-            "yahoo": yahoo or YahooBenchmarkProvider(),
             "b3": di_b3 or B3DIBenchmarkProvider(),
+            "yahoo": yahoo or YahooBenchmarkProvider(),
         }
         self._search_cache = _BoundedTTLCache[list[BenchmarkMatch]](ttl_seconds=15 * 60)
         self._history_cache = _BoundedTTLCache[list[BenchmarkHistoryPoint]](ttl_seconds=60 * 60)
@@ -649,7 +652,10 @@ class CompositeBenchmarkProvider:
             seen.add(identity)
             deduplicated.append(match)
         deduplicated = deduplicated[:limit]
-        self._search_cache.set(key, deduplicated)
+        # A source that failed is missing from the results; caching them would
+        # keep it missing after it recovers.
+        if not (failed or rate_limited):
+            self._search_cache.set(key, deduplicated)
         return list(deduplicated)
 
     async def history(

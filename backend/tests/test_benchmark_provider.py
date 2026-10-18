@@ -338,6 +338,42 @@ async def test_search_keeps_results_when_another_provider_fails():
     assert await provider.search("DI") == [b3.match]
 
 
+@pytest.mark.asyncio
+async def test_search_keeps_the_di_when_yahoo_fills_every_slot():
+    class CrowdedYahoo(BenchmarkProvider):
+        async def search(self, query: str, limit: int = 15) -> list[BenchmarkMatch]:
+            # "di" matches DIA, DIS and many more on Yahoo.
+            return [
+                BenchmarkMatch(symbol=f"DI{index}", name=f"DI{index}", provider="yahoo")
+                for index in range(limit)
+            ]
+
+    provider = CompositeBenchmarkProvider(yahoo=CrowdedYahoo(), di_b3=B3DIBenchmarkProvider())
+    results = await provider.search("di", 15)
+    assert len(results) == 15
+    assert (results[0].provider, results[0].symbol) == ("b3", "B3:DI")
+
+
+@pytest.mark.asyncio
+async def test_search_is_not_cached_while_a_source_is_failing():
+    class CountingFailingProvider(FailingProvider):
+        calls = 0
+
+        async def search(self, query: str, limit: int = 15) -> list[BenchmarkMatch]:
+            self.calls += 1
+            return await super().search(query, limit)
+
+    yahoo = CountingFailingProvider()
+    b3 = CountingProvider(
+        "b3",
+        BenchmarkMatch(symbol="B3:DI", name="DI", exchange="B3", provider="b3"),
+    )
+    provider = CompositeBenchmarkProvider(yahoo=yahoo, di_b3=b3)
+    assert await provider.search("cdi") == [b3.match]
+    assert await provider.search("cdi") == [b3.match]
+    assert yahoo.calls == b3.search_calls == 2
+
+
 def rate_history_loader(client):
     return DailyRateHistoryLoader(
         (
