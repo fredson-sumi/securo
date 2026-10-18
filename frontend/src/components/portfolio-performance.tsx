@@ -200,6 +200,13 @@ export function PortfolioPerformance({
     return grouped
   }, [holdings])
   const ungroupedHoldings = holdingsByGroup.get(null) ?? []
+  const holdingLabel = (holding: Asset) => (
+    <span className="truncate">
+      {holding.name}
+      {holding.ticker ? ` · ${holding.ticker}` : ''}
+      {holding.sell_date ? ` · ${t('assets.sold')}` : ''}
+    </span>
+  )
 
   const percentFormatter = useMemo(
     () =>
@@ -562,10 +569,7 @@ export function PortfolioPerformance({
                               onChange={() => toggleAsset(holding.id)}
                               className="h-4 w-4 shrink-0 rounded border-border accent-primary"
                             />
-                            <span className="truncate">
-                              {holding.name}
-                              {holding.ticker ? ` · ${holding.ticker}` : ''}
-                            </span>
+                            {holdingLabel(holding)}
                           </label>
                         ))}
                       </div>
@@ -587,10 +591,7 @@ export function PortfolioPerformance({
                             onChange={() => toggleAsset(holding.id)}
                             className="h-4 w-4 shrink-0 rounded border-border accent-primary"
                           />
-                          <span className="truncate">
-                            {holding.name}
-                            {holding.ticker ? ` · ${holding.ticker}` : ''}
-                          </span>
+                          {holdingLabel(holding)}
                         </label>
                       ))}
                     </div>

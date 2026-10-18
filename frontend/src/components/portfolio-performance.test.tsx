@@ -92,6 +92,7 @@ function renderPerformance(
   options: {
     mask?: (value: string) => string
     assetGroupIds?: string[] | null
+    holdings?: Asset[]
   } = {},
 ) {
   const queryClient = createTestQueryClient()
@@ -100,7 +101,7 @@ function renderPerformance(
     <PortfolioPerformance
       workspaceId={workspaceId}
       assetGroupIds={options.assetGroupIds ?? null}
-      holdings={holdings}
+      holdings={options.holdings ?? holdings}
       wallets={wallets}
       locale="en-US"
       dateLocale="en-US"
@@ -188,6 +189,30 @@ describe('PortfolioPerformance', () => {
     expect(apple).toBeEnabled()
     await waitFor(() =>
       expect(assets.performance).toHaveBeenLastCalledWith([], '1y', null, [], ['cash']),
+    )
+  })
+
+  it('lets a sold holding be measured on its own', async () => {
+    writeLastSelection(workspaceId, {
+      scope: 'custom',
+      walletIds: [],
+      assetIds: [],
+      period: '1y',
+    })
+    const sold = {
+      id: 'tesla',
+      group_id: 'brokerage',
+      name: 'Tesla',
+      ticker: 'TSLA',
+      sell_date: '2026-08-01',
+    } as Asset
+    const { user } = renderPerformance({ holdings: [...holdings, sold] })
+
+    await user.click(screen.getByRole('button', { name: 'Select wallets and assets' }))
+    const scope = screen.getByRole('dialog', { name: 'Portfolio scope' })
+    await user.click(within(scope).getByRole('checkbox', { name: 'Tesla · TSLA · Sold' }))
+    await waitFor(() =>
+      expect(assets.performance).toHaveBeenLastCalledWith([], '1y', null, [], ['tesla']),
     )
   })
 

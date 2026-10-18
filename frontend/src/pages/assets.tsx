@@ -523,6 +523,8 @@ export default function AssetsPage() {
 
   const activeAssets = useMemo(() => assetsList?.filter(a => !a.sell_date && !a.is_archived) ?? [], [assetsList])
   const soldAssets = assetsList?.filter(a => a.sell_date) ?? []
+  // Performance can measure a holding after it is sold, over the time it was held.
+  const performanceHoldings = useMemo(() => assetsList?.filter(a => !a.is_archived) ?? [], [assetsList])
   // Denominator for the "% of portfolio" column: current holdings only, in the
   // user's primary currency, so the active rows add up to 100%.
   const portfolioTotalPrimary = getPortfolioTotalPrimary(activeAssets)
@@ -1132,7 +1134,7 @@ export default function AssetsPage() {
           key={currentWorkspace.id}
           workspaceId={currentWorkspace.id}
           assetGroupIds={activeWalletIds}
-          holdings={activeAssets}
+          holdings={performanceHoldings}
           wallets={sortedWallets}
           locale={locale}
           dateLocale={dateLocale}
