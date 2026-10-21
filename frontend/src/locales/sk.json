@@ -2078,6 +2078,7 @@
     "performanceClearSelection": "Zrušiť výber",
     "performanceDragHint": "Potiahnutím po grafe zobrazíte výnos za ľubovoľné obdobie.",
     "performanceCashFlowHint": "Časovo vážený hrubý výnos: zmena v každom období očistená o vklady a výbery, zložená. Vklady a výbery sa nikdy nepočítajú ako zisk ani strata.",
+    "performanceDashboardHint": "Minulé hodnoty sa tu môžu líšiť od prehľadu. Po importe obchodov z nich stránka Aktíva znova zostaví históriu prepojenej investície a táto karta meria hrubé hodnoty pred daňou z príjmu. Prehľad ponecháva zostatky, ktoré banka nahlásila k jednotlivým dňom.",
     "performanceTradeImportHint": "Importujte históriu nákupov a odkupov svojich prepojených investícií, aby výnos presne sledoval každý obchod. Import sa začne pri ďalšej synchronizácii a pridá požiadavky k vašim bankovým pripojeniam.",
     "performanceTradeImportAction": "Importovať obchody",
     "performanceTradeImportEnabled": "Obchody sa naimportujú pri ďalšej synchronizácii.",

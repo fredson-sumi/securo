@@ -1962,6 +1962,7 @@
     "performanceClearSelection": "Limpar seleção",
     "performanceDragHint": "Arraste sobre o gráfico para ver a rentabilidade de qualquer período.",
     "performanceCashFlowHint": "Rentabilidade bruta ponderada pelo tempo: a variação de cada período, descontados reforços e resgates, acumulada de forma composta. Reforços e resgates nunca contam como ganho ou perda.",
+    "performanceDashboardHint": "Os valores passados aqui podem diferir do painel. Depois de importadas as operações, a página Património reconstrói o histórico de um investimento ligado a partir delas, e este separador mede valores brutos, antes do imposto sobre o rendimento. O painel mantém os saldos que o seu banco comunicou em cada data.",
     "performanceTradeImportHint": "Importe o histórico de subscrições e resgates dos seus investimentos ligados para que a rentabilidade acompanhe cada operação com exatidão. Começa na próxima sincronização e acrescenta pedidos às suas ligações bancárias.",
     "performanceTradeImportAction": "Importar operações",
     "performanceTradeImportEnabled": "As operações serão importadas na próxima sincronização.",

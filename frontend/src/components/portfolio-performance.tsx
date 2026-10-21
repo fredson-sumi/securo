@@ -1223,6 +1223,9 @@ export function PortfolioPerformance({
         <p className="max-w-3xl pb-4 text-xs leading-relaxed text-muted-foreground">
           {t('assets.performanceCashFlowHint')}
         </p>
+        <p className="max-w-3xl pb-4 text-xs leading-relaxed text-muted-foreground">
+          {t('assets.performanceDashboardHint')}
+        </p>
       </details>
     </section>
   )

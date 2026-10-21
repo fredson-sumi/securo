@@ -1962,6 +1962,7 @@
     "performanceClearSelection": "Effacer la sélection",
     "performanceDragHint": "Faites glisser sur le graphique pour voir le rendement d’une période.",
     "performanceCashFlowHint": "Rendement brut pondéré dans le temps : la variation de chaque période, hors apports et retraits, capitalisée. Les apports et retraits ne comptent jamais comme un gain ou une perte.",
+    "performanceDashboardHint": "Les valeurs passées affichées ici peuvent différer du tableau de bord. Une fois les opérations importées, la page Actifs reconstitue à partir d'elles l'historique d'un placement connecté, et cet onglet mesure des valeurs brutes, avant impôt sur le revenu. Le tableau de bord conserve les soldes déclarés par votre banque à chaque date.",
     "performanceTradeImportHint": "Importez l'historique des achats et des rachats de vos placements connectés pour que la performance suive chaque opération exactement. L'import commence à la prochaine synchronisation et ajoute des requêtes à vos connexions bancaires.",
     "performanceTradeImportAction": "Importer les opérations",
     "performanceTradeImportEnabled": "Les opérations seront importées à la prochaine synchronisation.",

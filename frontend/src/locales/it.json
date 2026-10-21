@@ -1962,6 +1962,7 @@
     "performanceClearSelection": "Cancella selezione",
     "performanceDragHint": "Trascina sul grafico per vedere il rendimento di qualsiasi periodo.",
     "performanceCashFlowHint": "Rendimento lordo ponderato nel tempo: la variazione di ogni periodo, al netto di versamenti e prelievi, composta. Versamenti e prelievi non contano mai come guadagno o perdita.",
+    "performanceDashboardHint": "I valori passati qui possono differire dalla dashboard. Una volta importate le operazioni, la pagina Beni ricostruisce da esse lo storico di un investimento collegato, e questa scheda misura valori lordi, prima delle imposte sul reddito. La dashboard mantiene i saldi comunicati dalla banca in ogni data.",
     "performanceTradeImportHint": "Importa lo storico di acquisti e rimborsi dei tuoi investimenti collegati, così il rendimento segue esattamente ogni operazione. Parte dalla prossima sincronizzazione e aggiunge richieste alle tue connessioni bancarie.",
     "performanceTradeImportAction": "Importa operazioni",
     "performanceTradeImportEnabled": "Le operazioni verranno importate alla prossima sincronizzazione.",

@@ -1959,6 +1959,7 @@
     "performanceClearSelection": "Auswahl aufheben",
     "performanceDragHint": "Ziehen Sie über das Diagramm, um die Rendite eines beliebigen Zeitraums zu sehen.",
     "performanceCashFlowHint": "Zeitgewichtete Bruttorendite: die Veränderung jeder Periode, bereinigt um Ein- und Auszahlungen, verkettet. Ein- und Auszahlungen zählen nie als Gewinn oder Verlust.",
+    "performanceDashboardHint": "Vergangene Werte können hier vom Dashboard abweichen. Sobald Transaktionen importiert sind, baut die Seite Vermögenswerte den Verlauf einer verbundenen Anlage daraus neu auf, und dieser Tab misst Bruttowerte vor Einkommensteuer. Das Dashboard behält die Salden, die deine Bank an jedem Tag gemeldet hat.",
     "performanceTradeImportHint": "Importiere die Kauf- und Rücknahmehistorie deiner verbundenen Anlagen, damit die Rendite jeder Transaktion genau folgt. Der Import beginnt mit der nächsten Synchronisierung und erzeugt zusätzliche Anfragen an deine Bankverbindungen.",
     "performanceTradeImportAction": "Transaktionen importieren",
     "performanceTradeImportEnabled": "Transaktionen werden bei der nächsten Synchronisierung importiert.",

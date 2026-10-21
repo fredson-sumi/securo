@@ -1962,6 +1962,7 @@
     "performanceClearSelection": "選択を解除",
     "performanceDragHint": "グラフ上をドラッグすると、任意の期間のリターンを表示します。",
     "performanceCashFlowHint": "時間加重の総リターン:各期間の変動から入出金を除き、複利で積み上げたもの。入金や出金が利益や損失として計上されることはありません。",
+    "performanceDashboardHint": "ここでの過去の値はダッシュボードと異なる場合があります。取引を取り込むと、資産ページは連携中の投資の履歴をその取引から再構成し、このタブは所得税控除前の総額で計測します。ダッシュボードは各日に銀行が報告した残高を保持します。",
     "performanceTradeImportHint": "連携中の投資の購入・解約履歴を取り込むと、リターンが各取引を正確に反映します。次回の同期から始まり、銀行連携へのリクエストが増えます。",
     "performanceTradeImportAction": "取引を取り込む",
     "performanceTradeImportEnabled": "取引は次回の同期で取り込まれます。",

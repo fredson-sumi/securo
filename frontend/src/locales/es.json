@@ -1962,6 +1962,7 @@
     "performanceClearSelection": "Borrar selección",
     "performanceDragHint": "Arrastra sobre el gráfico para ver la rentabilidad de cualquier período.",
     "performanceCashFlowHint": "Rentabilidad bruta ponderada en el tiempo: la variación de cada período, descontadas aportaciones y retiradas, acumulada de forma compuesta. Las aportaciones y retiradas nunca cuentan como ganancia o pérdida.",
+    "performanceDashboardHint": "Los valores pasados aquí pueden diferir de Inicio. Una vez importadas las operaciones, la página de Activos reconstruye con ellas el historial de una inversión conectada, y esta pestaña mide valores brutos, antes del impuesto sobre la renta. Inicio conserva los saldos que tu banco informó en cada fecha.",
     "performanceTradeImportHint": "Importa el historial de compras y rescates de tus inversiones conectadas para que la rentabilidad siga cada operación con exactitud. Empieza en la próxima sincronización y añade solicitudes a tus conexiones bancarias.",
     "performanceTradeImportAction": "Importar operaciones",
     "performanceTradeImportEnabled": "Las operaciones se importarán en la próxima sincronización.",
