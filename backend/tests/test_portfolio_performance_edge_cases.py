@@ -196,6 +196,45 @@ async def test_writing_off_a_delisted_holding_by_selling_at_zero(
 
 
 @pytest.mark.asyncio
+async def test_a_big_buy_on_a_day_the_price_moves_does_not_dilute_that_day(
+    session: AsyncSession, test_user: User, test_workspace
+):
+    """+10% on 10 shares, 100 more bought at the new price, then +10% again."""
+    held = await stock(session, test_user, test_workspace, "MOVE3")
+    session.add_all(
+        [
+            trade(held, "buy", day(0), "10", "100"),
+            close(held, day(0), "100"),
+            close(held, day(1), "110"),
+            trade(held, "buy", day(1), "100", "110"),
+            close(held, day(2), "121"),
+        ]
+    )
+    assert await portfolio_return(session, test_user, test_workspace) == pytest.approx(21.0)
+
+
+@pytest.mark.asyncio
+async def test_switching_holdings_on_a_day_keeps_the_days_move(
+    session: AsyncSession, test_user: User, test_workspace
+):
+    """Everything sold after a +10% day and put into another holding at its close."""
+    old = await stock(session, test_user, test_workspace, "OLDS3")
+    new = await stock(session, test_user, test_workspace, "NEWS3")
+    session.add_all(
+        [
+            trade(old, "buy", day(0), "10", "100"),
+            close(old, day(0), "100"),
+            close(old, day(1), "110"),
+            trade(old, "sell", day(1), "10", "110"),
+            trade(new, "buy", day(1), "11", "100"),
+            close(new, day(1), "100", quantity="11"),
+            close(new, day(2), "110", quantity="11"),
+        ]
+    )
+    assert await portfolio_return(session, test_user, test_workspace) == pytest.approx(21.0)
+
+
+@pytest.mark.asyncio
 async def test_day_trade_profit_counts_even_when_netted_on_one_date(
     session: AsyncSession, test_user: User, test_workspace
 ):

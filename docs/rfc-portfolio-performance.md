@@ -48,12 +48,21 @@ and the intervals are multiplied together. The result does not depend on
 whether bought at once or over time. That is what makes it comparable with an
 index, and it is the standard figure brokers report.
 
-### Money in at the start of the day, money out at the end
+### When money in and out counts
 
-The two directions are timed differently, on purpose:
-
-- **Contributions (buys)** count from the start of the day. The new money is
-  exposed to that day's price move, so it belongs in the base.
+- **Contributions (buys)** are made at the price the day is valued at, so
+  the day's move up to that price belongs to what was already held. The
+  interval is measured on the earlier holdings, and the new money joins the
+  base only after it. A buy's commission bought nothing: it is a loss on the
+  whole portfolio at the moment of the buy, `value / (value + fee)`.
+  Otherwise 10 shares that gain 10%, a large buy at the new price and
+  another +10% would show about 11% instead of 21%.
+- **Buys sold again the same day** (a day trade, matched per holding by
+  share count) were held through part of the day, so that share of the buys
+  counts from the start of the day instead.
+- **A synced purchase only the next snapshot shows** was made at the earlier
+  snapshot's price, so it is exposed to the move between the two and also
+  counts from the start.
 - **Withdrawals (sales)** count at the end of the day. Sale proceeds are the
   *result* of that day's price move, so they belong in the outcome.
 

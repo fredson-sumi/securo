@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import calendar
 from bisect import bisect_right
+from dataclasses import dataclass, field
 import logging
 import uuid
 from datetime import date, timedelta
@@ -131,7 +132,7 @@ def snapshot_balance_flows(
 def snapshot_ledger_flows(
     trades: list[tuple[date, Decimal, Decimal]],
     snapshots: list[tuple[date, float, Optional[float]]],
-) -> list[tuple[date, Decimal]]:
+) -> list[tuple[date, Decimal, date]]:
     """Date each trade of a synced holding where its valuation reflects it.
 
     ``trades`` holds ``(date, signed quantity, cash flow)``; ``snapshots``
@@ -147,23 +148,25 @@ def snapshot_ledger_flows(
     one when known, else the snapshot value at the trade's own price. A day
     whose trades net to no cash has no price to count with, so it waits for
     the next snapshot. Trades no snapshot reflects yet are left out until
-    one does.
+    one does. Each flow is returned as ``(snapshot date, cash, trade date)``.
     """
     by_date: dict[date, tuple[Decimal, Decimal]] = {}
     for trade_date, quantity, flow in trades:
         held_quantity, held_flow = by_date.get(trade_date, (Decimal("0"), Decimal("0")))
         by_date[trade_date] = (held_quantity + quantity, held_flow + flow)
     if not snapshots:
-        return [(trade_date, flow) for trade_date, (_, flow) in sorted(by_date.items())]
+        return [
+            (trade_date, flow, trade_date) for trade_date, (_, flow) in sorted(by_date.items())
+        ]
 
     first_snapshot = snapshots[0][0]
     position = Decimal("0")
-    flows: list[tuple[date, Decimal]] = []
+    flows: list[tuple[date, Decimal, date]] = []
     for trade_date, (quantity, flow) in sorted(by_date.items()):
         before, after = position, position + quantity
         position = after
         if trade_date < first_snapshot:
-            flows.append((trade_date, flow))
+            flows.append((trade_date, flow, trade_date))
             continue
         same_day = next((point for point in snapshots if point[0] == trade_date), None)
         later = next((point for point in snapshots if point[0] > trade_date), None)
@@ -175,7 +178,7 @@ def snapshot_ledger_flows(
             if shares is not None and abs(shares - float(after)) < abs(shares - float(before)):
                 reflected = same_day
         if reflected is not None:
-            flows.append((reflected[0], flow))
+            flows.append((reflected[0], flow, trade_date))
     return flows
 
 
@@ -336,6 +339,9 @@ def time_weighted_returns(
     values: list[tuple[date, float]],
     contributions: dict[date, float],
     withdrawals: Optional[dict[date, float]] = None,
+    *,
+    fees: Optional[dict[date, float]] = None,
+    opening: Optional[dict[date, float]] = None,
 ) -> list[tuple[date, float]]:
     """Cumulative time-weighted return, the standard measure brokers report.
 
@@ -344,27 +350,44 @@ def time_weighted_returns(
     therefore does not affect the result: the same holdings show the same
     return whether bought in one go or over time.
 
-    Money added counts from the start of the day whose valuation first
-    includes it, and money taken out (sale proceeds, given as positive
-    amounts) at the end of it: a sale realises that day's price move, so
-    selling everything below the last valuation is a loss on what was sold,
-    not a total loss. Without ``withdrawals``, negative ``contributions``
-    are taken as the withdrawals.
+    ``contributions`` are bought at the price the day is valued at, so the
+    day's move up to that price belongs to what was already held, and the
+    new money only joins the base afterwards. ``fees`` is the part of them
+    that bought nothing (commissions), a loss on the whole portfolio at the
+    moment of the buy. ``opening`` holds money bought at the previous
+    valuation's price instead, which is exposed to the whole interval and
+    counts from its start. Money taken out (sale proceeds, given as
+    positive amounts) counts at the end of the day: a sale realises that
+    day's price move, so selling everything below the last valuation is a
+    loss on what was sold, not a total loss. Without ``withdrawals``,
+    negative ``contributions`` are taken as the withdrawals.
     """
     if withdrawals is None:
         withdrawals = {d: -flow for d, flow in contributions.items() if flow < 0}
         contributions = {d: flow for d, flow in contributions.items() if flow > 0}
+    fees = fees or {}
+    opening = opening or {}
     if not values:
         return []
     growth = 1.0
     previous_value = max(values[0][1], 0.0)
     output = [(values[0][0], 0.0)]
     for point_date, current_value in values[1:]:
-        invested = previous_value + contributions.get(point_date, 0.0)
-        # Nothing invested over the interval (before the first buy, after
-        # selling everything): there is no return to measure.
-        if invested > 0:
-            growth *= (max(current_value, 0.0) + withdrawals.get(point_date, 0.0)) / invested
+        ending = max(current_value, 0.0) + withdrawals.get(point_date, 0.0)
+        cash = contributions.get(point_date, 0.0)
+        fee = min(fees.get(point_date, 0.0), cash)
+        bought = cash - fee
+        held = previous_value + opening.get(point_date, 0.0)
+        if held > 0 and ending >= bought:
+            growth *= (ending - bought) / held
+            if fee > 0 and ending > 0:
+                growth *= ending / (ending + fee)
+        elif held + cash > 0:
+            # Nothing held yet (the first buy), or a buy the day's valuation
+            # does not cover: measure the day on everything put in.
+            growth *= ending / (held + cash)
+        # Otherwise nothing was invested over the interval (before the first
+        # buy, after selling everything): there is no return to measure.
         previous_value = max(current_value, 0.0)
         output.append((point_date, (growth - 1.0) * 100.0))
     return output
@@ -470,6 +493,23 @@ def _fill_aligned_series_multi(
     return points
 
 
+@dataclass
+class CashFlows:
+    """Money moved into and out of the holdings, per date.
+
+    All amounts are positive and in the primary currency; see
+    ``time_weighted_returns`` for how each kind is timed. Contributions and
+    withdrawals are kept apart rather than netted so a same-day buy and
+    sale still each count at their own end of the day.
+    """
+
+    contributions: dict[date, float] = field(default_factory=dict)
+    withdrawals: dict[date, float] = field(default_factory=dict)
+    fees: dict[date, float] = field(default_factory=dict)
+    opening: dict[date, float] = field(default_factory=dict)
+    dates: set[date] = field(default_factory=set)
+
+
 async def _cash_flows(
     session: AsyncSession,
     assets: list[Asset],
@@ -479,14 +519,8 @@ async def _cash_flows(
     end_date: date,
     *,
     use_gross_values: bool = False,
-) -> tuple[dict[date, float], dict[date, float], set[date]]:
-    """Money moved into and out of the holdings, per date.
-
-    Returns ``(contributions, withdrawals, flow_dates)`` with both amounts
-    positive and in the primary currency. They are kept apart rather than
-    netted so a same-day buy and sale still each count at their own end of
-    the day (see ``time_weighted_returns``).
-    """
+) -> CashFlows:
+    """Money moved into and out of the holdings, per date."""
     asset_ids = [asset.id for asset in assets]
     tx_rows = list(
         (
@@ -501,9 +535,7 @@ async def _cash_flows(
     )
     tx_asset_ids = {tx.asset_id for tx in tx_rows}
     asset_by_id = {asset.id: asset for asset in assets}
-    contributions: dict[date, float] = {}
-    withdrawals: dict[date, float] = {}
-    flow_dates: set[date] = set()
+    flows = CashFlows()
     rate_cache: dict[tuple[str, date], Decimal] = {}
 
     async def in_primary(amount: Decimal, currency: str, target_date: date) -> float:
@@ -523,23 +555,43 @@ async def _cash_flows(
             rate_cache[key] = rate
         return float(amount * rate)
 
-    async def add_flow(asset: Asset, point_date: date, native_flow: Decimal) -> None:
+    async def add_flow(
+        asset: Asset,
+        point_date: date,
+        native_flow: Decimal,
+        *,
+        fee: Decimal = Decimal("0"),
+        at_open: bool = False,
+    ) -> None:
         if not start_date < point_date <= end_date:
             return
         converted = await in_primary(native_flow, asset.currency, point_date)
-        record(point_date, converted)
+        converted_fee = await in_primary(fee, asset.currency, point_date) if fee else 0.0
+        record(point_date, converted, fee=converted_fee, at_open=at_open)
 
-    def record(point_date: date, amount: float) -> None:
-        if amount > 0:
-            contributions[point_date] = contributions.get(point_date, 0.0) + amount
+    def record(point_date: date, amount: float, *, fee: float = 0.0, at_open: bool = False) -> None:
+        def add(target: dict[date, float], value: float) -> None:
+            target[point_date] = target.get(point_date, 0.0) + value
+
+        if amount > 0 and at_open:
+            # Bought at the previous valuation's price: its fee is already
+            # part of the base the interval is measured on.
+            add(flows.opening, amount)
+        elif amount > 0:
+            add(flows.contributions, amount)
+            if fee > 0:
+                add(flows.fees, min(fee, amount))
         elif amount < 0:
-            withdrawals[point_date] = withdrawals.get(point_date, 0.0) - amount
-        flow_dates.add(point_date)
+            add(flows.withdrawals, -amount)
+        flows.dates.add(point_date)
 
     # Market-priced holdings are valued from the ledger itself, so a trade
     # moves the valuation on its own date. Synced holdings are valued from
     # provider snapshots; their trades are aligned to those below.
     snapshot_ledger_trades: dict[uuid.UUID, list[tuple[date, Decimal, Decimal]]] = {}
+    snapshot_ledger_fees: dict[tuple[uuid.UUID, date], Decimal] = {}
+    # (bought, cost incl. fees, fees, sold) per market-priced holding and day.
+    market_days: dict[tuple[uuid.UUID, date], list[Decimal]] = {}
     for tx in tx_rows:
         asset = asset_by_id.get(tx.asset_id)
         if asset is None:
@@ -548,11 +600,35 @@ async def _cash_flows(
         gross = quantity * Decimal(str(tx.price))
         fee = Decimal(str(tx.fee or 0))
         native_flow = gross + fee if tx.kind == "buy" else -(gross - fee)
+        # A sale's fee already comes off its proceeds.
+        buy_fee = fee if tx.kind == "buy" else Decimal("0")
         if asset.valuation_method == "market_price":
-            await add_flow(asset, tx.date, native_flow)
+            day_totals = market_days.setdefault((asset.id, tx.date), [Decimal("0")] * 4)
+            if tx.kind == "buy":
+                day_totals[0] += quantity
+                day_totals[1] += native_flow
+                day_totals[2] += fee
+            else:
+                day_totals[3] += quantity
+                await add_flow(asset, tx.date, native_flow)
         else:
             signed = quantity if tx.kind == "buy" else -quantity
             snapshot_ledger_trades.setdefault(asset.id, []).append((tx.date, signed, native_flow))
+            key = (asset.id, tx.date)
+            snapshot_ledger_fees[key] = snapshot_ledger_fees.get(key, Decimal("0")) + buy_fee
+    for (asset_id, trade_date), (bought, cost, fees, sold) in market_days.items():
+        if not bought:
+            continue
+        # Shares sold again the same day were held through part of it, so
+        # that share of the buys counts from the start of the day. The rest
+        # is still held at the close and was bought at the day's price.
+        round_trip = min(bought, sold) / bought
+        asset = asset_by_id[asset_id]
+        if round_trip:
+            await add_flow(asset, trade_date, cost * round_trip, at_open=True)
+        if round_trip < 1:
+            kept = 1 - round_trip
+            await add_flow(asset, trade_date, cost * kept, fee=fees * kept)
 
     snapshot_ledger_assets = [asset for asset in assets if asset.id in snapshot_ledger_trades]
     ledger_values = await asset_service._load_asset_native_values(
@@ -576,10 +652,18 @@ async def _cash_flows(
             # The valuation drops to zero the day after sell_date.
             snapshots = [point for point in snapshots if point[0] <= asset.sell_date]
             snapshots.append((asset.sell_date + timedelta(days=1), 0.0, 0.0))
-        for point_date, native_flow in snapshot_ledger_flows(
+        for point_date, native_flow, trade_date in snapshot_ledger_flows(
             snapshot_ledger_trades[asset.id], snapshots
         ):
-            await add_flow(asset, point_date, native_flow)
+            # A trade only a later snapshot reflects was made at the price
+            # of the one before, so it is exposed to the move between them.
+            await add_flow(
+                asset,
+                point_date,
+                native_flow,
+                fee=snapshot_ledger_fees.get((asset.id, trade_date), Decimal("0")),
+                at_open=point_date > trade_date,
+            )
 
     # Connected fixed-income holdings arrive as balance snapshots without a
     # transaction ledger. A redemption or purchase shows in the share count
@@ -671,7 +755,7 @@ async def _cash_flows(
         if proceeds > 0:
             record(liquidation_date, -proceeds)
 
-    return contributions, withdrawals, flow_dates
+    return flows
 
 
 async def get_portfolio_performance_multi(
@@ -798,7 +882,7 @@ async def get_portfolio_performance_multi(
         first_positive_dates,
         observation_starts,
     )
-    contributions, withdrawals, flow_dates = await _cash_flows(
+    flows = await _cash_flows(
         session,
         assets,
         raw_trend,
@@ -827,10 +911,16 @@ async def get_portfolio_performance_multi(
     portfolio_dates = (
         {common_start, observation_boundary, last_date}
         | {d for d in trend_dates if observation_boundary < d <= last_date}
-        | {d for d in flow_dates if common_start < d <= last_date}
+        | {d for d in flows.dates if common_start < d <= last_date}
     )
     portfolio_values = [(d, snapshot(d)) for d in sorted(portfolio_dates)]
-    portfolio_returns = time_weighted_returns(portfolio_values, contributions, withdrawals)
+    portfolio_returns = time_weighted_returns(
+        portfolio_values,
+        flows.contributions,
+        flows.withdrawals,
+        fees=flows.fees,
+        opening=flows.opening,
+    )
     benchmark_returns: dict[str, list[tuple[date, float]]] = {}
     for key, pairs in history_pairs.items():
         returns = _benchmark_index_returns(

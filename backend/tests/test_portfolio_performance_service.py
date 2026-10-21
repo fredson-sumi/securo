@@ -66,6 +66,7 @@ def test_time_weighted_return_counts_fees_as_negative_performance():
     returns = time_weighted_returns(
         [(start, 100.0), (start + timedelta(days=1), 200.0)],
         {start + timedelta(days=1): 101.0},
+        fees={start + timedelta(days=1): 1.0},
     )
     assert returns[-1][1] == pytest.approx((200 / 201 - 1) * 100)
 
@@ -83,6 +84,32 @@ def test_time_weighted_return_ignores_when_money_was_added():
         {start + timedelta(days=2): 10_000.0},
     )
     assert [value for _, value in returns] == pytest.approx([0.0, 10.0, 10.0, 21.0])
+
+
+def test_time_weighted_return_keeps_a_buy_at_the_days_price_out_of_that_days_move():
+    """+10% on 100, a 1000 buy at the new price, then +10%: 21%, not 11%."""
+    start = date(2026, 1, 1)
+    shares = 100 + 1000 / 1.1
+    returns = time_weighted_returns(
+        [
+            (start, 100.0),
+            (start + timedelta(days=1), shares * 1.1),
+            (start + timedelta(days=2), shares * 1.21),
+        ],
+        {start + timedelta(days=1): 1000.0},
+    )
+    assert [value for _, value in returns] == pytest.approx([0.0, 10.0, 21.0])
+
+
+def test_time_weighted_return_exposes_money_bought_at_the_previous_price():
+    """A purchase only the next snapshot shows was made before that move."""
+    start = date(2026, 1, 1)
+    returns = time_weighted_returns(
+        [(start, 100.0), (start + timedelta(days=1), 1210.0)],
+        {},
+        opening={start + timedelta(days=1): 1000.0},
+    )
+    assert returns[-1][1] == pytest.approx(10.0)
 
 
 def test_time_weighted_return_starts_from_zero_and_survives_full_liquidation():
@@ -174,7 +201,7 @@ async def test_transaction_cash_flows_include_fees_and_historical_fx(
         return amount * Decimal("2"), Decimal("2")
 
     monkeypatch.setattr("app.services.portfolio_performance_service.convert", fake_convert)
-    contributions, withdrawals, flow_dates = await _cash_flows(
+    flows = await _cash_flows(
         session,
         [asset],
         [],
@@ -182,10 +209,12 @@ async def test_transaction_cash_flows_include_fees_and_historical_fx(
         start,
         start + timedelta(days=2),
     )
-    assert set(contributions) == {transaction_date}
-    assert contributions[transaction_date] == pytest.approx(202.0)
-    assert withdrawals == {}
-    assert flow_dates == {transaction_date}
+    assert set(flows.contributions) == {transaction_date}
+    assert flows.contributions[transaction_date] == pytest.approx(202.0)
+    assert flows.fees == {transaction_date: pytest.approx(2.0)}
+    assert flows.withdrawals == {}
+    assert flows.opening == {}
+    assert flows.dates == {transaction_date}
 
 
 @pytest.mark.asyncio
@@ -622,8 +651,8 @@ def test_ledger_flows_land_on_the_first_snapshot_that_reflects_them():
         ],
     )
     assert flows == [
-        (date(2026, 9, 2), Decimal("25009.32")),
-        (date(2026, 9, 29), Decimal("8973.18")),
+        (date(2026, 9, 2), Decimal("25009.32"), date(2026, 9, 2)),
+        (date(2026, 9, 29), Decimal("8973.18"), date(2026, 9, 28)),
     ]
 
 
@@ -642,8 +671,8 @@ def test_ledger_flows_use_a_same_day_snapshot_that_already_reflects_the_trade():
         ],
     )
     assert flows == [
-        (date(2026, 7, 1), Decimal("10000")),
-        (date(2026, 9, 2), Decimal("-7795.63")),
+        (date(2026, 7, 1), Decimal("10000"), date(2026, 7, 1)),
+        (date(2026, 9, 2), Decimal("-7795.63"), date(2026, 9, 2)),
     ]
 
 
@@ -659,7 +688,7 @@ def test_ledger_flows_prefer_the_stored_share_count():
             (date(2026, 9, 29), 1500.0, 15.0),
         ],
     )
-    assert flows[-1] == (date(2026, 9, 29), Decimal("500"))
+    assert flows[-1] == (date(2026, 9, 29), Decimal("500"), date(2026, 9, 28))
 
 
 def test_ledger_flows_survive_a_day_whose_trades_net_to_no_cash():
@@ -673,7 +702,7 @@ def test_ledger_flows_survive_a_day_whose_trades_net_to_no_cash():
             (date(2026, 9, 11), 600.0, None),
         ],
     )
-    assert flows == [(date(2026, 9, 11), Decimal("0"))]
+    assert flows == [(date(2026, 9, 11), Decimal("0"), day)]
 
 
 @pytest.mark.asyncio
