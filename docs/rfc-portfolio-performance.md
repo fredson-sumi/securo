@@ -115,12 +115,20 @@ the broker reported.
 - Histories are cached for an hour, searches for fifteen minutes. Failed
   requests and histories too short to compare are never cached.
 - Each benchmark reports `source_error` (`unavailable`, `rate_limited`,
-  `no_data`) instead of failing the whole request. The frontend does not keep
+  `no_data`, `no_fx_rate`) instead of failing the whole request. The frontend does not keep
   such a response fresh, so revisiting the tab retries.
 
 The benchmark line is the index's own change since the period start: a
 time-weighted portfolio return is independent of cash flows, so it is compared
 with the index itself rather than with a shadow portfolio.
+
+An index quoted in another currency (Yahoo reports each symbol's; the Índice
+DI is in reais) is converted to the portfolio's currency at each day's stored
+exchange rate before its return is taken, the same rates that value the
+portfolio's own foreign holdings. An S&P 500 line on a BRL portfolio therefore
+includes the dollar's move against the real, as a BRL investor holding it
+would see. When either currency has no stored rate at all, that benchmark
+reports `no_fx_rate` rather than mixing currencies.
 
 ## Edge cases
 

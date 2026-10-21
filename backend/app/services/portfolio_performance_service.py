@@ -19,7 +19,9 @@ from app.core.app_clock import app_today
 from app.models.asset import Asset
 from app.models.asset_transaction import AssetTransaction
 from app.models.asset_value import AssetValue
+from app.models.fx_rate import FxRate
 from app.providers.benchmark import (
+    BenchmarkHistoryPoint,
     BenchmarkHistoryRouter,
     BenchmarkProviderError,
     BenchmarkRateLimitedError,
@@ -391,6 +393,66 @@ def time_weighted_returns(
         previous_value = max(current_value, 0.0)
         output.append((point_date, (growth - 1.0) * 100.0))
     return output
+
+
+async def _usd_rates(
+    session: AsyncSession, currency: str, first: date, last: date
+) -> list[tuple[date, float]]:
+    """Stored USD→currency rates covering ``first``..``last``, ascending:
+    those in the range plus the closest one on either side of it."""
+    if currency == "USD":
+        return [(first, 1.0)]
+    quoted = select(FxRate.date, FxRate.rate).where(
+        FxRate.base_currency == "USD", FxRate.quote_currency == currency
+    )
+    before = (
+        await session.execute(
+            quoted.where(FxRate.date < first).order_by(FxRate.date.desc()).limit(1)
+        )
+    ).all()
+    within = (
+        await session.execute(
+            quoted.where(FxRate.date >= first, FxRate.date <= last).order_by(FxRate.date)
+        )
+    ).all()
+    after = (
+        await session.execute(quoted.where(FxRate.date > last).order_by(FxRate.date).limit(1))
+    ).all()
+    return [(point_date, float(rate)) for point_date, rate in [*before, *within, *after]]
+
+
+async def _in_portfolio_currency(
+    session: AsyncSession,
+    history: list[BenchmarkHistoryPoint],
+    primary_currency: str,
+) -> Optional[list[tuple[date, float]]]:
+    """A benchmark's values in the portfolio's currency, at each day's rate.
+
+    An index quoted in another currency is not comparable with the
+    portfolio until its return includes the currency move, as the
+    portfolio's own foreign holdings do. Each day uses the stored rate the
+    rest of the app would (that day's, else the closest before, else the
+    first after). None when either currency has no stored rate at all; a
+    source that does not name its currency is taken as already matching.
+    """
+    currency = history[0].currency
+    pairs = [(point.date, point.value) for point in history]
+    if not currency or currency == primary_currency:
+        return pairs
+    first, last = pairs[0][0], pairs[-1][0]
+    source = await _usd_rates(session, currency, first, last)
+    target = await _usd_rates(session, primary_currency, first, last)
+    if not source or not target:
+        return None
+
+    def rate_on(rates: list[tuple[date, float]], target_date: date) -> float:
+        index = bisect_right(rates, (target_date, float("inf"))) - 1
+        return rates[max(index, 0)][1]
+
+    return [
+        (point_date, value * rate_on(target, point_date) / rate_on(source, point_date))
+        for point_date, value in pairs
+    ]
 
 
 def _benchmark_index_returns(
@@ -835,7 +897,11 @@ async def get_portfolio_performance_multi(
             elif len(history) < 2:
                 source_errors[key] = "no_data"
             else:
-                history_pairs[key] = [(point.date, point.value) for point in history]
+                converted = await _in_portfolio_currency(session, history, primary_currency)
+                if converted is None:
+                    source_errors[key] = "no_fx_rate"
+                else:
+                    history_pairs[key] = converted
 
     raw_trend: list[dict] = trend["trend"]
     trend_dates = [date.fromisoformat(str(row["date"])) for row in raw_trend]

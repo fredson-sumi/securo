@@ -11,6 +11,7 @@ from app.models.asset import Asset
 from app.models.asset_group import AssetGroup
 from app.models.asset_transaction import AssetTransaction
 from app.models.asset_value import AssetValue
+from app.models.fx_rate import FxRate
 from app.models.user import User
 from app.providers.benchmark import BenchmarkHistoryPoint
 from app.services.portfolio_performance_service import (
@@ -274,6 +275,75 @@ async def test_performance_compares_manual_asset_with_benchmark(
     assert result.benchmark_return == pytest.approx(5.0)
     assert result.excess_return == pytest.approx(5.0)
     assert result.points[0].portfolio == result.points[0].benchmark == 0.0
+
+
+async def _flat_brl_fund(session: AsyncSession, user: User, workspace, start: date, end: date):
+    asset = Asset(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        workspace_id=workspace.id,
+        name="Manual fund",
+        type="fund",
+        currency="BRL",
+        valuation_method="manual",
+    )
+    session.add(asset)
+    await session.flush()
+    session.add_all(
+        AssetValue(
+            asset_id=asset.id,
+            workspace_id=workspace.id,
+            amount=Decimal("100"),
+            date=when,
+            source="manual",
+        )
+        for when in (start, end)
+    )
+
+
+@pytest.mark.asyncio
+async def test_benchmark_in_another_currency_is_converted_at_each_days_rate(
+    session: AsyncSession, test_user: User, test_workspace
+):
+    """A USD index up 10% while the dollar rose 10% against the real: +21% in BRL."""
+    end = date.today()
+    start = end - timedelta(days=30)
+    await _flat_brl_fund(session, test_user, test_workspace, start, end)
+    session.add_all(
+        FxRate(base_currency="USD", quote_currency="BRL", date=when, rate=rate, source="test")
+        for when, rate in ((start - timedelta(days=3), Decimal("5")), (end, Decimal("5.5")))
+    )
+    await session.commit()
+
+    provider = FakeHistoryProvider(
+        [BenchmarkHistoryPoint(start, 200.0, "USD"), BenchmarkHistoryPoint(end, 220.0, "USD")]
+    )
+    result = await get_portfolio_performance(
+        session, test_workspace.id, test_user.id, "BRL", "yahoo", "^GSPC", "3m",
+        end_date=end, provider=provider,  # type: ignore[arg-type]
+    )
+    assert result.benchmark_return == pytest.approx(21.0)
+
+
+@pytest.mark.asyncio
+async def test_benchmark_without_a_stored_rate_reports_it_instead_of_mixing_currencies(
+    session: AsyncSession, test_user: User, test_workspace
+):
+    end = date.today()
+    start = end - timedelta(days=30)
+    await _flat_brl_fund(session, test_user, test_workspace, start, end)
+    await session.commit()
+
+    provider = FakeHistoryProvider(
+        [BenchmarkHistoryPoint(start, 200.0, "USD"), BenchmarkHistoryPoint(end, 220.0, "USD")]
+    )
+    result = await get_portfolio_performance(
+        session, test_workspace.id, test_user.id, "BRL", "yahoo", "^GSPC", "3m",
+        end_date=end, provider=provider,  # type: ignore[arg-type]
+    )
+    assert result.benchmark_return is None
+    assert result.benchmarks[0].source_error == "no_fx_rate"
+    assert result.portfolio_return == pytest.approx(0.0)
 
 
 @pytest.mark.asyncio

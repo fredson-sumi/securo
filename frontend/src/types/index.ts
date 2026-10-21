@@ -951,7 +951,7 @@ export interface BenchmarkPerformance {
   provider: 'yahoo' | 'b3'
   benchmark_return: number | null
   excess_return: number | null
-  source_error?: 'unavailable' | 'rate_limited' | 'no_data' | null
+  source_error?: 'unavailable' | 'rate_limited' | 'no_data' | 'no_fx_rate' | null
 }
 
 export interface HoldingTradeImport {

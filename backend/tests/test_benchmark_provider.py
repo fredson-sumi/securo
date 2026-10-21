@@ -13,6 +13,7 @@ from app.providers.benchmark import (
     BenchmarkProvider,
     BenchmarkProviderError,
     BenchmarkRateLimitedError,
+    DI_B3_SYMBOL,
     CompositeBenchmarkProvider,
     DailyRateHistoryLoader,
     DailyRateSource,
@@ -535,3 +536,35 @@ async def test_incomplete_history_can_be_retried_after_source_recovers(initial_c
     assert len(await provider.history("yahoo", "^TEST", start, end)) == initial_count
     assert len(await provider.history("yahoo", "^TEST", start, end)) == 2
     assert calls == 2
+
+
+def test_yahoo_history_carries_the_quote_currency_in_major_units(monkeypatch):
+    import pandas as pd
+
+    class FakeTicker:
+        history_metadata = {"currency": "GBp"}
+
+        def __init__(self, symbol):
+            pass
+
+        def history(self, **kwargs):
+            return pd.DataFrame(
+                {"Close": [700.0, 710.0]},
+                index=pd.to_datetime(["2026-01-02", "2026-01-05"]),
+            )
+
+    monkeypatch.setattr("yfinance.Ticker", FakeTicker)
+    points = YahooBenchmarkProvider._history_sync("ISF.L", date(2026, 1, 1), date(2026, 1, 5))
+    assert [(point.value, point.currency) for point in points] == [(700.0, "GBP"), (710.0, "GBP")]
+
+
+@pytest.mark.asyncio
+async def test_di_history_is_quoted_in_reais(monkeypatch):
+    provider = B3DIBenchmarkProvider()
+
+    async def history(start_date, end_date):
+        return [BenchmarkHistoryPoint(start_date, 100.0), BenchmarkHistoryPoint(end_date, 100.1)]
+
+    monkeypatch.setattr(provider._history_loader, "history", history)
+    points = await provider.history(DI_B3_SYMBOL, date(2026, 1, 2), date(2026, 1, 5))
+    assert {point.currency for point in points} == {"BRL"}

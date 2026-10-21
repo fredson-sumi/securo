@@ -208,7 +208,7 @@ class BenchmarkMatch(BaseModel):
     provider: str
 
 
-BenchmarkSourceError = Literal["unavailable", "rate_limited", "no_data"]
+BenchmarkSourceError = Literal["unavailable", "rate_limited", "no_data", "no_fx_rate"]
 
 
 class BenchmarkPerformanceRead(BaseModel):

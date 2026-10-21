@@ -385,6 +385,7 @@ export function PortfolioPerformance({
     unavailable: t('assets.performanceSourceError'),
     rate_limited: t('assets.performanceSourceRateLimited'),
     no_data: t('assets.performanceSourceNoData'),
+    no_fx_rate: t('assets.performanceSourceNoFxRate'),
   }
   const chartData = useMemo(
     () =>
@@ -1227,6 +1228,11 @@ export function PortfolioPerformance({
         <p className="max-w-3xl pb-4 text-xs leading-relaxed text-muted-foreground">
           {t('assets.performanceDashboardHint')}
         </p>
+        {benchmarksEnabled && (
+          <p className="max-w-3xl pb-4 text-xs leading-relaxed text-muted-foreground">
+            {t('assets.performanceBenchmarkCurrencyHint')}
+          </p>
+        )}
       </details>
     </section>
   )

@@ -24,6 +24,7 @@ import httpx
 from app.providers.market_price import (
     MarketPriceProvider,
     MarketPriceRateLimitedError,
+    _normalize_currency_and_price,
     _rate_limit_exception_types,
 )
 from app.schemas.asset import BenchmarkMatch
@@ -50,6 +51,8 @@ YAHOO_SPARK_BATCH_SIZE = 20
 class BenchmarkHistoryPoint:
     date: date
     value: float
+    #: ISO code the value is quoted in, or None when the source does not say.
+    currency: Optional[str] = None
 
 
 class BenchmarkProviderError(Exception):
@@ -265,7 +268,8 @@ class YahooBenchmarkProvider(BenchmarkProvider):
 
         # ``end`` is exclusive. Ticker.history gives flat OHLC columns for one
         # symbol and auto_adjust uses the provider's split/dividend adjustment.
-        frame = yf.Ticker(symbol).history(
+        ticker = yf.Ticker(symbol)
+        frame = ticker.history(
             start=start_date.isoformat(),
             end=(end_date + timedelta(days=1)).isoformat(),
             interval="1d",
@@ -273,6 +277,15 @@ class YahooBenchmarkProvider(BenchmarkProvider):
         )
         if frame is None or frame.empty or "Close" not in frame.columns:
             return []
+        try:
+            quoted = (ticker.history_metadata or {}).get("currency")
+        except Exception:  # noqa: BLE001 - the values are still usable
+            quoted = None
+        # Minor units (pence, cents) scale every value alike, so returns
+        # only need the major currency for conversion.
+        currency = (
+            _normalize_currency_and_price(quoted, 1.0)[0] if isinstance(quoted, str) else None
+        )
 
         values: dict[date, float] = {}
         for raw_date, raw_value in frame["Close"].items():
@@ -285,7 +298,7 @@ class YahooBenchmarkProvider(BenchmarkProvider):
             point_date = raw_date.date() if hasattr(raw_date, "date") else raw_date
             if start_date <= point_date <= end_date:
                 values[point_date] = value
-        return [BenchmarkHistoryPoint(d, values[d]) for d in sorted(values)]
+        return [BenchmarkHistoryPoint(d, values[d], currency) for d in sorted(values)]
 
 
 def _normalize_search(value: str) -> str:
@@ -540,7 +553,11 @@ class B3DIBenchmarkProvider(BenchmarkProvider):
     ) -> list[BenchmarkHistoryPoint]:
         if (symbol or "").strip().upper() != DI_B3_SYMBOL:
             return []
-        return await self._history_loader.history(start_date, end_date)
+        # The Índice DI compounds Brazilian interbank rates: a BRL return.
+        return [
+            BenchmarkHistoryPoint(point.date, point.value, "BRL")
+            for point in await self._history_loader.history(start_date, end_date)
+        ]
 
 
 T = TypeVar("T")
