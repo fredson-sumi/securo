@@ -211,7 +211,7 @@ export default function AssetsPage() {
   const dateLocale = useDateLocale()
   const { mask } = usePrivacyMode()
   const { user } = useAuth()
-  const { canWrite, current: currentWorkspace } = useWorkspace()
+  const { canWrite, canManage, current: currentWorkspace } = useWorkspace()
   const userCurrency = user?.preferences?.currency_display ?? 'USD'
   const queryClient = useQueryClient()
 
@@ -1139,6 +1139,7 @@ export default function AssetsPage() {
           locale={locale}
           dateLocale={dateLocale}
           mask={mask}
+          canManage={canManage}
         />
       ) : (
       <>

@@ -22,7 +22,12 @@ vi.mock('@/contexts/auth-context', () => ({
 }))
 
 vi.mock('@/lib/api', () => ({
-  assets: { performance: vi.fn(), benchmarkSearch: vi.fn() },
+  assets: {
+    performance: vi.fn(),
+    benchmarkSearch: vi.fn(),
+    tradeImport: vi.fn(),
+    enableTradeImport: vi.fn(),
+  },
   auth: { updateMe: vi.fn() },
   info: { get: vi.fn() },
 }))
@@ -93,6 +98,7 @@ function renderPerformance(
     mask?: (value: string) => string
     assetGroupIds?: string[] | null
     holdings?: Asset[]
+    canManage?: boolean
   } = {},
 ) {
   const queryClient = createTestQueryClient()
@@ -106,6 +112,7 @@ function renderPerformance(
       locale="en-US"
       dateLocale="en-US"
       mask={options.mask ?? ((value) => value)}
+      canManage={options.canManage}
     />,
     { queryClient },
   )
@@ -130,6 +137,25 @@ describe('PortfolioPerformance', () => {
     vi.mocked(assets.performance).mockResolvedValue(performanceData)
     vi.mocked(assets.benchmarkSearch).mockResolvedValue([benchmarks[4]])
     vi.mocked(info.get).mockResolvedValue({ features: { agents: false } })
+  })
+
+  it('lets only an owner turn on trade import', async () => {
+    vi.mocked(assets.tradeImport).mockResolvedValue({ available: true, enabled: false })
+    vi.mocked(assets.enableTradeImport).mockResolvedValue({ available: true, enabled: true })
+    const { user, unmount } = renderPerformance({ canManage: true })
+
+    await user.click(await screen.findByRole('button', { name: 'Import trades' }))
+
+    expect(assets.enableTradeImport).toHaveBeenCalledTimes(1)
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Import trades' })).not.toBeInTheDocument()
+    })
+    unmount()
+
+    renderPerformance()
+    await screen.findByText('+12.50%')
+    expect(assets.tradeImport).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button', { name: 'Import trades' })).not.toBeInTheDocument()
   })
 
   it('hides benchmark comparison when the server has it disabled', async () => {

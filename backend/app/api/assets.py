@@ -41,6 +41,7 @@ from app.schemas.asset import (
     AssetValueCreate,
     AssetValueRead,
     BenchmarkMatch,
+    HoldingTradeImportRead,
     MarketSymbolMatch,
     MarketSymbolQuote,
     PortfolioPerformanceRead,
@@ -149,6 +150,36 @@ async def benchmark_search(
         ) from exc
 
 
+async def _trade_import_read(session: AsyncSession, workspace_id: uuid.UUID) -> HoldingTradeImportRead:
+    available, enabled = await connection_service.holding_trade_import_status(
+        session, workspace_id
+    )
+    return HoldingTradeImportRead(available=available, enabled=enabled)
+
+
+@router.get("/performance/trade-import", response_model=HoldingTradeImportRead)
+async def holding_trade_import(
+    ctx: WorkspaceContext = Depends(current_workspace),
+    session: AsyncSession = Depends(get_async_session),
+) -> HoldingTradeImportRead:
+    return await _trade_import_read(session, ctx.workspace.id)
+
+
+@router.post("/performance/trade-import", response_model=HoldingTradeImportRead)
+async def enable_holding_trade_import(
+    ctx: WorkspaceContext = Depends(current_writable_workspace),
+    session: AsyncSession = Depends(get_async_session),
+) -> HoldingTradeImportRead:
+    """Import the trades behind connected holdings on every later sync.
+
+    Owner only: each import costs provider requests on the owner's
+    connections.
+    """
+    ctx.require_owner()
+    await connection_service.enable_holding_trades(session, ctx.workspace.id)
+    return await _trade_import_read(session, ctx.workspace.id)
+
+
 @router.get("/performance", response_model=PortfolioPerformanceRead)
 async def portfolio_performance(
     provider: list[str] | None = Query(None),
@@ -183,7 +214,6 @@ async def portfolio_performance(
             detail="Invalid benchmark symbol",
         )
     comparisons = list(dict.fromkeys(zip(providers, symbols, strict=True)))
-    await connection_service.enable_holding_trades(session, ctx.workspace.id)
     if not get_settings().performance_benchmarks_enabled:
         # The portfolio's own return needs no external data; a stale client
         # still asking for indices just gets it without them.

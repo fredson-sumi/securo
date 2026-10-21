@@ -954,6 +954,11 @@ export interface BenchmarkPerformance {
   source_error?: 'unavailable' | 'rate_limited' | 'no_data' | null
 }
 
+export interface HoldingTradeImport {
+  available: boolean
+  enabled: boolean
+}
+
 export interface PortfolioPerformance {
   benchmark_symbol: string | null
   benchmark_provider: string | null

@@ -1,7 +1,7 @@
 """Provider trades are only fetched where they can change the ledger.
 
 Fetching trades costs one provider request per holding, so a bank sync skips
-them until the workspace has opened Performance, and afterwards only fetches
+them until a workspace owner turns trade import on, and afterwards only fetches
 holdings whose stored trades no longer add up to the share count the provider
 reports.
 """
@@ -166,7 +166,7 @@ async def _sync(session: AsyncSession, user: User, connection: BankConnection, *
 
 
 @pytest.mark.asyncio
-async def test_no_trade_requests_until_performance_is_opened(
+async def test_no_trade_requests_until_trade_import_is_on(
     session: AsyncSession, test_user: User, connection: BankConnection
 ):
     await _sync(session, test_user, connection, _fund("a", "10"), _fund("b", "5"))
@@ -271,13 +271,66 @@ async def test_enabling_keeps_other_settings_and_what_was_learned(
 
 
 @pytest.mark.asyncio
-async def test_opening_performance_enables_holding_trades(
+async def test_opening_performance_leaves_trade_import_off(
     client: AsyncClient, auth_headers: dict, session: AsyncSession, connection: BankConnection
 ):
-    assert "holding_trades" not in (connection.settings or {})
     response = await client.get(
         "/api/assets/performance", params={"period": "3m"}, headers=auth_headers
     )
     assert response.status_code == 200
     await session.refresh(connection)
+    assert "holding_trades" not in (connection.settings or {})
+
+
+@pytest.mark.asyncio
+async def test_trade_import_is_available_once_a_connection_has_holdings(
+    client: AsyncClient,
+    auth_headers: dict,
+    session: AsyncSession,
+    test_user: User,
+    connection: BankConnection,
+):
+    endpoint = "/api/assets/performance/trade-import"
+    response = await client.get(endpoint, headers=auth_headers)
+    assert response.json() == {"available": False, "enabled": False}
+
+    await _sync(session, test_user, connection, _fund("a", "10"))
+    response = await client.get(endpoint, headers=auth_headers)
+    assert response.json() == {"available": True, "enabled": False}
+
+
+@pytest.mark.asyncio
+async def test_owner_turns_trade_import_on(
+    client: AsyncClient,
+    auth_headers: dict,
+    session: AsyncSession,
+    test_user: User,
+    connection: BankConnection,
+):
+    await _sync(session, test_user, connection, _fund("a", "10"))
+
+    response = await client.post("/api/assets/performance/trade-import", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json() == {"available": True, "enabled": True}
+    await session.refresh(connection)
     assert (connection.settings or {})["holding_trades"] == {}
+
+
+@pytest.mark.asyncio
+async def test_a_viewer_cannot_turn_trade_import_on(
+    client: AsyncClient,
+    viewer_auth_headers: dict,
+    session: AsyncSession,
+    test_user: User,
+    connection: BankConnection,
+):
+    await _sync(session, test_user, connection, _fund("a", "10"))
+
+    response = await client.post(
+        "/api/assets/performance/trade-import", headers=viewer_auth_headers
+    )
+
+    assert response.status_code == 403
+    await session.refresh(connection)
+    assert "holding_trades" not in (connection.settings or {})

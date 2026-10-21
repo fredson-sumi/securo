@@ -78,6 +78,7 @@ import type {
   MarketSymbolMatch,
   MarketSymbolQuote,
   BenchmarkMatch,
+  HoldingTradeImport,
   PortfolioPerformance,
   PortfolioPerformancePeriod,
   Attachment,
@@ -1428,6 +1429,14 @@ export const assets = {
       },
       paramsSerializer: { indexes: null as null },
     })
+    return data
+  },
+  tradeImport: async (): Promise<HoldingTradeImport> => {
+    const { data } = await api.get('/assets/performance/trade-import')
+    return data
+  },
+  enableTradeImport: async (): Promise<HoldingTradeImport> => {
+    const { data } = await api.post('/assets/performance/trade-import')
     return data
   },
   marketSearch: async (q: string, limit = 15): Promise<MarketSymbolMatch[]> => {

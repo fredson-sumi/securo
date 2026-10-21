@@ -2077,7 +2077,11 @@
     "performanceSelectedPeriod": "Vybrané obdobie",
     "performanceClearSelection": "Zrušiť výber",
     "performanceDragHint": "Potiahnutím po grafe zobrazíte výnos za ľubovoľné obdobie.",
-    "performanceCashFlowHint": "Časovo vážený hrubý výnos: zmena v každom období očistená o vklady a výbery, zložená. Vklady a výbery sa nikdy nepočítajú ako zisk ani strata."
+    "performanceCashFlowHint": "Časovo vážený hrubý výnos: zmena v každom období očistená o vklady a výbery, zložená. Vklady a výbery sa nikdy nepočítajú ako zisk ani strata.",
+    "performanceTradeImportHint": "Importujte históriu nákupov a odkupov svojich prepojených investícií, aby výnos presne sledoval každý obchod. Import sa začne pri ďalšej synchronizácii a pridá požiadavky k vašim bankovým pripojeniam.",
+    "performanceTradeImportAction": "Importovať obchody",
+    "performanceTradeImportEnabled": "Obchody sa naimportujú pri ďalšej synchronizácii.",
+    "performanceTradeImportError": "Import obchodov sa nepodarilo zapnúť."
   },
   "reports": {
     "section": "Analytika",

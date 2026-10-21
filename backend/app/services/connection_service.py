@@ -249,19 +249,39 @@ def _sync_assets_enabled(settings: Optional[dict]) -> bool:
     return (settings or {}).get("sync_assets", True) is not False
 
 
-# Present in BankConnection.settings once the connection's workspace has
-# opened the Performance tab. Provider trades only serve that tab and cost a
-# request per holding, so bank sync imports them only for these connections.
+# Present in BankConnection.settings once a workspace owner has turned on
+# trade import from the Performance tab. Provider trades only serve that tab
+# and cost a request per holding, so bank sync imports them only for these
+# connections.
 # Maps each holding whose trades did not add up to the share count they were
 # checked against, so it is not fetched again until that count changes.
 _HOLDING_TRADES = "holding_trades"
 
 
+async def holding_trade_import_status(
+    session: AsyncSession, workspace_id: uuid.UUID
+) -> tuple[bool, bool]:
+    """Whether the workspace has synced holdings, and whether every
+    connection holding them already imports their trades."""
+    connections = (
+        await session.execute(
+            select(BankConnection).where(
+                BankConnection.workspace_id == workspace_id,
+                exists().where(Asset.connection_id == BankConnection.id),
+            )
+        )
+    ).scalars().all()
+    enabled = all(_HOLDING_TRADES in (c.settings or {}) for c in connections)
+    return bool(connections), bool(connections) and enabled
+
+
 async def enable_holding_trades(session: AsyncSession, workspace_id: uuid.UUID) -> None:
     """Start importing provider trades for the workspace's connections.
 
-    Called when the Performance tab is opened. A connection in the middle of
-    a sync is skipped rather than waited for; the next visit picks it up.
+    An explicit owner action: it adds provider requests to every sync of
+    connections the owner may not share with the viewer. A connection in
+    the middle of a sync is skipped rather than waited for; asking again
+    picks it up.
     """
 
     def pending(connection: BankConnection) -> bool:

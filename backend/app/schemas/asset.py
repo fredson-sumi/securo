@@ -192,6 +192,13 @@ class MarketSymbolMatch(BaseModel):
     quote_type: Optional[str] = None
 
 
+class HoldingTradeImportRead(BaseModel):
+    """Whether bank sync imports the trades behind connected holdings."""
+
+    available: bool
+    enabled: bool
+
+
 class BenchmarkMatch(BaseModel):
     """A searchable comparison index exposed by a benchmark provider."""
 

@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
   Activity,
@@ -82,6 +82,7 @@ export function PortfolioPerformance({
   locale,
   dateLocale,
   mask,
+  canManage = false,
 }: {
   workspaceId: string
   assetGroupIds: string[] | null
@@ -90,8 +91,11 @@ export function PortfolioPerformance({
   locale: string
   dateLocale: string
   mask: (value: string) => string
+  /** Owner rights: only an owner can turn on trade import for the connections. */
+  canManage?: boolean
 }) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const chartId = useId().replace(/:/g, '')
   const [benchmarkOpen, setBenchmarkOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -187,6 +191,22 @@ export function PortfolioPerformance({
     staleTime: (query) =>
       query.state.data?.benchmarks.some((metric) => metric.source_error) ? 0 : 5 * 60 * 1000,
     retry: 1,
+  })
+
+  const tradeImportKey = ['holding-trade-import', workspaceId]
+  const tradeImport = useQuery({
+    queryKey: tradeImportKey,
+    queryFn: assets.tradeImport,
+    enabled: canManage,
+    staleTime: 5 * 60 * 1000,
+  })
+  const enableTradeImport = useMutation({
+    mutationFn: assets.enableTradeImport,
+    onSuccess: (status) => {
+      queryClient.setQueryData(tradeImportKey, status)
+      toast.success(t('assets.performanceTradeImportEnabled'))
+    },
+    onError: () => toast.error(t('assets.performanceTradeImportError')),
   })
 
   const holdingsByGroup = useMemo(() => {
@@ -1175,6 +1195,21 @@ export function PortfolioPerformance({
           </>
         )}
       </div>
+      {canManage && tradeImport.data?.available && !tradeImport.data.enabled && (
+        <div className="flex flex-wrap items-center gap-3 border-t border-border px-4 py-3 sm:px-6">
+          <p className="min-w-0 flex-1 basis-64 text-xs leading-relaxed text-muted-foreground">
+            {t('assets.performanceTradeImportHint')}
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={enableTradeImport.isPending}
+            onClick={() => enableTradeImport.mutate()}
+          >
+            {t('assets.performanceTradeImportAction')}
+          </Button>
+        </div>
+      )}
       <details className="group border-t border-border px-4 sm:px-6">
         <summary className="flex min-h-12 cursor-pointer list-none items-center gap-2 rounded-md py-3 text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
           <Info size={15} className="shrink-0" aria-hidden="true" />

@@ -1963,7 +1963,11 @@
     "performanceSelectedPeriod": "Geselecteerde periode",
     "performanceClearSelection": "Selectie wissen",
     "performanceDragHint": "Sleep over de grafiek om het rendement van een periode te zien.",
-    "performanceCashFlowHint": "Tijdgewogen brutorendement: de verandering per periode, gecorrigeerd voor stortingen en opnames, samengesteld. Stortingen en opnames tellen nooit als winst of verlies."
+    "performanceCashFlowHint": "Tijdgewogen brutorendement: de verandering per periode, gecorrigeerd voor stortingen en opnames, samengesteld. Stortingen en opnames tellen nooit als winst of verlies.",
+    "performanceTradeImportHint": "Importeer de aankoop- en verkoopgeschiedenis van je gekoppelde beleggingen, zodat het rendement elke transactie precies volgt. Dit begint bij de volgende synchronisatie en voegt verzoeken toe aan je bankkoppelingen.",
+    "performanceTradeImportAction": "Transacties importeren",
+    "performanceTradeImportEnabled": "Transacties worden bij de volgende synchronisatie geïmporteerd.",
+    "performanceTradeImportError": "Transactie-import kon niet worden ingeschakeld."
   },
   "reports": {
     "section": "Analyses",
