@@ -105,6 +105,29 @@ def snapshot_position_flows(
     return flows
 
 
+def snapshot_balance_flows(
+    points: list[tuple[date, float, Optional[float]]],
+) -> list[tuple[date, float]]:
+    """Cash flows of a synced fixed-income holding with no trade history.
+
+    ``points`` holds ``(date, value, quantity)`` ascending, one per date.
+    Where two consecutive snapshots both carry a share count, only a change
+    in shares moves money, as in ``snapshot_position_flows``: a balance that
+    dips and recovers on the same shares is a market move both ways, not a
+    redemption followed by a gain. Without a share count the balance alone
+    has to decide, and a decrease is taken as a redemption so moving money
+    to another holding does not read as a loss.
+    """
+    flows: list[tuple[date, float]] = []
+    for previous, current in zip(points, points[1:]):
+        (_, prev_value, prev_qty), (point_date, value, qty) = previous, current
+        if prev_qty and qty:
+            flows.extend(snapshot_position_flows([previous, current]))
+        elif prev_value > value:
+            flows.append((point_date, value - prev_value))
+    return flows
+
+
 def snapshot_ledger_flows(
     trades: list[tuple[date, Decimal, Decimal]],
     snapshots: list[tuple[date, float, Optional[float]]],
@@ -559,9 +582,9 @@ async def _cash_flows(
             await add_flow(asset, point_date, native_flow)
 
     # Connected fixed-income holdings arrive as balance snapshots without a
-    # transaction ledger. A partial redemption therefore appears as a lower
-    # next-day valuation. Record that decrease as an external withdrawal so
-    # moving money into another holding does not become a portfolio loss.
+    # transaction ledger. A redemption or purchase shows in the share count
+    # when the provider reports one, and otherwise only as a lower balance
+    # (see ``snapshot_balance_flows``).
     synced_fixed_income = [
         asset for asset in assets if asset.id not in tx_asset_ids and _is_synced_fixed_income(asset)
     ]
@@ -571,16 +594,17 @@ async def _cash_flows(
         up_to_date=end_date,
         use_gross=use_gross_values,
     )
+    fixed_income_quantities = await _snapshot_quantities(session, synced_fixed_income, end_date)
     for asset in synced_fixed_income:
         # Last-write-wins for providers that update a same-day snapshot.
         values_by_date = {point_date: value for point_date, value in native_values[str(asset.id)]}
-        previous_value: Optional[float] = None
-        for point_date, current_value in sorted(values_by_date.items()):
-            if previous_value is not None:
-                decrease = previous_value - current_value
-                if decrease > 0:
-                    await add_flow(asset, point_date, -Decimal(str(decrease)))
-            previous_value = current_value
+        quantities = fixed_income_quantities[asset.id]
+        points = [
+            (point_date, value, quantities.get(point_date))
+            for point_date, value in sorted(values_by_date.items())
+        ]
+        for point_date, native_flow in snapshot_balance_flows(points):
+            await add_flow(asset, point_date, Decimal(str(native_flow)))
 
     # Connected market holdings (stocks, ETFs) without a reconciled trade
     # history: buying more shares raises the valuation exactly like a price

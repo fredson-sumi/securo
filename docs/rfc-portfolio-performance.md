@@ -82,7 +82,7 @@ telling *money moved* apart from *market moved*:
 | Market-priced (ticker) holdings with a ledger | quantity held × stored daily close | each buy/sell on its own date, at `quantity × price ± fee`, converted with that day's FX rate |
 | Synced holdings whose provider trades reconcile | provider snapshots | each trade lands on the first snapshot whose share count reflects it, so a valuation update a day later is not mistaken for a gain or a loss |
 | Synced holdings without usable trades | provider snapshots | change in reported share count × new unit price. A unit price below 60% or above ~167% of the previous snapshot's is taken as a split, not a purchase. A value change alone never counts as a purchase |
-| Synced fixed income (CDB, LCI, Tesouro, COE…) | provider balance | a balance *decrease* is a redemption (withdrawal), so moving money to another holding is not a loss; a full redemption without trades pays out the last balance |
+| Synced fixed income (CDB, LCI, Tesouro, COE…) | provider balance | with a reported share count, only a change in shares is a purchase or redemption, so a balance that dips and recovers is a market move; without one, a balance *decrease* is a redemption (withdrawal), so moving money to another holding is not a loss; a full redemption without trades pays out the last balance |
 | Manual assets (property, private funds…) | user-entered values | first appearance is a contribution; a sale returns `sell_price` the day after `sell_date`, or the last value when no price was entered (an explicit 0 writes it off) |
 
 **Gross values.** Performance uses pre-tax values: income tax withheld on a

@@ -306,6 +306,80 @@ async def test_provider_redemption_without_trades_pays_out_the_last_balance(
     assert await portfolio_return(session, test_user, test_workspace) == pytest.approx(0.5)
 
 
+async def synced_cdb(session: AsyncSession, user: User, workspace, *snapshots) -> Asset:
+    """A Pluggy CDB with no trades: ``snapshots`` are (day, balance, shares or None)."""
+    cdb = Asset(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        workspace_id=workspace.id,
+        name="CDB",
+        type="investment",
+        currency="BRL",
+        valuation_method="manual",
+        source="pluggy",
+        external_metadata={"type": "FIXED_INCOME", "status": "ACTIVE"},
+    )
+    session.add(cdb)
+    await session.flush()
+    session.add_all(
+        AssetValue(
+            asset_id=cdb.id,
+            workspace_id=workspace.id,
+            amount=Decimal(balance),
+            price=Decimal(balance) / Decimal(shares) if shares else None,
+            date=day(offset),
+            source="sync",
+        )
+        for offset, balance, shares in snapshots
+    )
+    return cdb
+
+
+@pytest.mark.asyncio
+async def test_synced_cdb_that_dips_and_recovers_on_the_same_shares_is_flat(
+    session: AsyncSession, test_user: User, test_workspace
+):
+    await synced_cdb(
+        session,
+        test_user,
+        test_workspace,
+        (0, "1000", "1000"),
+        (5, "950", "1000"),
+        (10, "1000", "1000"),
+    )
+    assert await portfolio_return(session, test_user, test_workspace) == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_synced_cdb_redemption_shows_in_its_share_count(
+    session: AsyncSession, test_user: User, test_workspace
+):
+    # Half the shares redeemed after the unit value rose 1%.
+    await synced_cdb(
+        session,
+        test_user,
+        test_workspace,
+        (0, "1000", "1000"),
+        (5, "505", "500"),
+    )
+    assert await portfolio_return(session, test_user, test_workspace) == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_synced_cdb_without_a_share_count_reads_a_lower_balance_as_a_redemption(
+    session: AsyncSession, test_user: User, test_workspace
+):
+    await synced_cdb(
+        session,
+        test_user,
+        test_workspace,
+        (0, "1000", None),
+        (5, "500", None),
+        (10, "505", None),
+    )
+    assert await portfolio_return(session, test_user, test_workspace) == pytest.approx(1.0)
+
+
 @pytest.mark.asyncio
 async def test_split_recorded_as_free_shares_is_not_a_loss(
     session: AsyncSession, test_user: User, test_workspace
