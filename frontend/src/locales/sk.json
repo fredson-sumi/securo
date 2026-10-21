@@ -1925,6 +1925,7 @@
     "txBuy": "Nákup",
     "txSell": "Predaj",
     "txFee": "Poplatok",
+    "txSyncedHint": "Importované z vašej banky. Synchronizácia tento obchod udržiava aktuálny, preto ho tu nemožno upraviť.",
     "txSaved": "Transakcia uložená",
     "txDeleted": "Transakcia vymazaná",
     "editTransaction": "Upraviť transakciu",

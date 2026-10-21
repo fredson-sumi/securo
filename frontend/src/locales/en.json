@@ -1809,6 +1809,7 @@
     "txBuy": "Buy",
     "txSell": "Sell",
     "txFee": "Fee",
+    "txSyncedHint": "Imported from your bank. Its sync keeps this trade up to date, so it can't be edited here.",
     "txSaved": "Transaction saved",
     "txDeleted": "Transaction deleted",
     "editTransaction": "Edit transaction",

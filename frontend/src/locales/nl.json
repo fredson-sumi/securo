@@ -1811,6 +1811,7 @@
     "txBuy": "Koop",
     "txSell": "Verkopen",
     "txFee": "Vergoeding",
+    "txSyncedHint": "Geïmporteerd van je bank. De synchronisatie houdt deze transactie bij, dus je kunt hem hier niet bewerken.",
     "txSaved": "Transactie opgeslagen",
     "txDeleted": "Transactie verwijderd",
     "editTransaction": "Transactie bewerken",

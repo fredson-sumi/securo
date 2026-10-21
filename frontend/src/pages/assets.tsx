@@ -181,6 +181,25 @@ const HOLDINGS_GRID = 'minmax(0,2.4fr) 0.7fr 1.1fr 1fr 0.9fr 1.3fr 0.6fr 4.5rem'
 // diagnosable — e.g. the oversell guard message, or a "Not Found" when a
 // transaction endpoint is missing because the backend is older than the
 // frontend (issue #315) — rather than a cryptic "Error".
+// A trade a connected bank reported. Its sync rewrites it from the bank's
+// data, so editing or deleting it here would be silently undone.
+function isSyncedTransaction(tx: AssetTransaction): boolean {
+  return tx.source !== 'manual' && tx.source !== 'import'
+}
+
+function SyncedTransactionBadge() {
+  const { t } = useTranslation()
+  return (
+    <Badge
+      variant="outline"
+      className="text-[10px] px-1.5 py-0 shrink-0 text-muted-foreground"
+      title={t('assets.txSyncedHint')}
+    >
+      {t('assets.sourceSync')}
+    </Badge>
+  )
+}
+
 function assetErrorMessage(e: unknown, fallback: string): string {
   const resp = (e as { response?: { data?: { detail?: unknown }; status?: number } })?.response
   const detail = resp?.data?.detail
@@ -2567,7 +2586,8 @@ function AssetTransactionsTab({
                     </p>
                   )}
                 </div>
-                {canWrite && (
+                {isSyncedTransaction(tx) && <SyncedTransactionBadge />}
+                {canWrite && !isSyncedTransaction(tx) && (
                   <div className="flex items-center gap-1 shrink-0">
                     <button
                       onClick={() => openEdit(tx)}
@@ -2804,7 +2824,8 @@ function HoldingLedger({
               <span className="text-xs font-semibold tabular-nums text-foreground">
                 {mask(formatCurrency(tx.quantity * tx.price, asset.currency, locale))}
               </span>
-              {canWrite && (
+              {isSyncedTransaction(tx) && <SyncedTransactionBadge />}
+              {canWrite && !isSyncedTransaction(tx) && (
                 <button
                   onClick={() => deleteMutation.mutate(tx.id)}
                   disabled={deleteMutation.isPending}

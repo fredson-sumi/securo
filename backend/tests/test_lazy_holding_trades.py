@@ -16,8 +16,10 @@ from typing import Optional
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.asset_transaction import AssetTransaction
 from app.models.bank_connection import BankConnection
 from app.models.user import User
 from app.providers import register_provider
@@ -334,3 +336,29 @@ async def test_a_viewer_cannot_turn_trade_import_on(
     assert response.status_code == 403
     await session.refresh(connection)
     assert "holding_trades" not in (connection.settings or {})
+
+
+@pytest.mark.asyncio
+async def test_a_synced_trade_cannot_be_edited_or_deleted(
+    client: AsyncClient,
+    auth_headers: dict,
+    session: AsyncSession,
+    test_user: User,
+    test_workspace,
+    connection: BankConnection,
+):
+    await enable_holding_trades(session, test_workspace.id)
+    await _sync(session, test_user, connection, _fund("a", "10"))
+    trade = (
+        await session.execute(select(AssetTransaction).where(AssetTransaction.source == "trades-mock"))
+    ).scalar_one()
+
+    edited = await client.patch(
+        f"/api/assets/transactions/{trade.id}", json={"quantity": 5}, headers=auth_headers
+    )
+    deleted = await client.delete(f"/api/assets/transactions/{trade.id}", headers=auth_headers)
+
+    assert edited.status_code == 409
+    assert deleted.status_code == 409
+    await session.refresh(trade)
+    assert trade.quantity == Decimal("10")

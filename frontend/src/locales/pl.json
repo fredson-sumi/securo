@@ -1898,6 +1898,7 @@
     "txBuy": "Kupno",
     "txSell": "Sprzedaż",
     "txFee": "Opłata",
+    "txSyncedHint": "Zaimportowano z banku. Synchronizacja aktualizuje tę transakcję, więc nie można jej tu edytować.",
     "txSaved": "Transakcja zapisana",
     "txDeleted": "Transakcja usunięta",
     "editTransaction": "Edytuj transakcję",

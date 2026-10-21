@@ -1809,6 +1809,7 @@
     "txBuy": "Vétel",
     "txSell": "Eladás",
     "txFee": "Díj",
+    "txSyncedHint": "A bankodtól importálva. A szinkronizálás naprakészen tartja ezt az ügyletet, ezért itt nem szerkeszthető.",
     "txSaved": "Tranzakció mentve",
     "txDeleted": "Tranzakció törölve",
     "editTransaction": "Tranzakció szerkesztése",

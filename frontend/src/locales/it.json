@@ -1813,6 +1813,7 @@
     "txBuy": "Acquisto",
     "txSell": "Vendita",
     "txFee": "Commissione",
+    "txSyncedHint": "Importata dalla tua banca. La sincronizzazione mantiene aggiornata questa operazione, quindi non può essere modificata qui.",
     "txSaved": "Transazione salvata",
     "txDeleted": "Transazione eliminata",
     "editTransaction": "Modifica transazione",

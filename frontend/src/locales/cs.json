@@ -1941,6 +1941,7 @@
     "txBuy": "Nákup",
     "txSell": "Prodej",
     "txFee": "Poplatek",
+    "txSyncedHint": "Importováno z vaší banky. Synchronizace tento obchod udržuje aktuální, proto ho zde nelze upravit.",
     "txSaved": "Transakce uložena",
     "txDeleted": "Transakce smazána",
     "editTransaction": "Upravit transakci",
