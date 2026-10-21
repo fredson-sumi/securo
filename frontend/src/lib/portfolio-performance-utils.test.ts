@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   benchmarkStorageKey,
   isSameSelection,
+  newViewId,
   periodReturn,
   readBenchmarkSelection,
   readBenchmarkSelections,
@@ -119,6 +120,20 @@ describe('saved performance views', () => {
     expect(preferences.language).toBe('pt-BR')
     expect(readSavedViews(preferences, 'ws-1')).toEqual([view])
     expect(readSavedViews(preferences, 'other')).toHaveLength(1)
+  })
+
+  it('creates view ids over plain http, where crypto.randomUUID is missing', () => {
+    const { crypto } = globalThis
+    vi.stubGlobal('crypto', { getRandomValues: crypto.getRandomValues.bind(crypto) })
+    try {
+      const ids = new Set([newViewId(), newViewId()])
+      expect(ids.size).toBe(2)
+      for (const id of ids) {
+        expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+      }
+    } finally {
+      vi.stubGlobal('crypto', crypto)
+    }
   })
 
   it('matches a selection regardless of order', () => {

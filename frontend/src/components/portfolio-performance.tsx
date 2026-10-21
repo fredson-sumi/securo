@@ -34,6 +34,7 @@ import {
   MAX_PERFORMANCE_BENCHMARKS,
   type PerformanceView,
   isSameSelection,
+  newViewId,
   periodReturn,
   readBenchmarkSelections,
   readLastSelection,
@@ -331,7 +332,7 @@ export function PortfolioPerformance({
     const name = viewName.trim()
     if (!name) return
     const view: PerformanceView = {
-      id: crypto.randomUUID(),
+      id: newViewId(),
       name,
       walletIds: [...selectedWalletIds],
       assetIds: [...selectedAssetIds],
