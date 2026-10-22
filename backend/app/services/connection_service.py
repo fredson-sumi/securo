@@ -37,6 +37,7 @@ from app.providers.base import (
     ProviderRateLimited,
     ProviderUserActionRequired,
     SessionExpiredError,
+    TransactionData,
 )
 from app.services import oauth_state
 from app.services import admin_service
@@ -1114,6 +1115,41 @@ async def _match_pluggy_category(
     return result.scalars().first()
 
 
+def _bank_converted_amount(
+    txn_data: TransactionData, account_currency: str, user_currency: str
+) -> Optional[Decimal]:
+    """The bank's own conversion of a foreign charge into the primary currency.
+
+    Only when the account is held in the primary currency, so the figure the
+    bank charged the account is the primary amount. None otherwise.
+    """
+    if (
+        txn_data.amount_in_account_currency is not None
+        and txn_data.amount
+        and account_currency == user_currency
+        and txn_data.currency != account_currency
+    ):
+        return txn_data.amount_in_account_currency
+    return None
+
+
+async def _stamp_synced_primary_amount(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    transaction: Transaction,
+    converted: Optional[Decimal],
+) -> None:
+    """Prefer the bank's conversion (see _bank_converted_amount); else use our FX rates.
+
+    The transaction's amount must already be the charged amount.
+    """
+    if converted is not None:
+        transaction.amount_primary = converted
+        transaction.fx_rate_used = converted / transaction.amount
+    else:
+        await stamp_primary_amount(session, user_id, transaction)
+
+
 async def _find_installment_category(
     session: AsyncSession,
     account_id: uuid.UUID,
@@ -1515,18 +1551,13 @@ async def handle_oauth_callback(
             if transaction.category_id is None:
                 transaction.category_id = category_id
 
-            # Prefer bank-provided conversion for international transactions
             acct_currency = acc_data.currency or user_currency
-            if (
-                txn_data.amount_in_account_currency is not None
-                and txn_data.amount
-                and acct_currency == user_currency
-                and txn_data.currency != acct_currency
-            ):
-                transaction.amount_primary = txn_data.amount_in_account_currency
-                transaction.fx_rate_used = txn_data.amount_in_account_currency / txn_data.amount
-            else:
-                await stamp_primary_amount(session, user_id, transaction)
+            await _stamp_synced_primary_amount(
+                session,
+                user_id,
+                transaction,
+                _bank_converted_amount(txn_data, acct_currency, user_currency),
+            )
 
         # After importing the initial batch, reconcile the opening balance so
         # that SUM(all transactions) matches the provider-reported balance. Any
@@ -2600,6 +2631,10 @@ async def sync_connection(
                 incoming_currency = (
                     txn_data.currency or acc_data.currency or user_currency
                 )
+                acct_currency = acc_data.currency or user_currency
+                converted = _bank_converted_amount(
+                    txn_data, acct_currency, user_currency
+                )
                 category_id = await _find_installment_category(
                     session, account.id, txn_data
                 )
@@ -2687,6 +2722,15 @@ async def sync_connection(
                     # win, the charge fills the empty ones, and only its
                     # provenance is recorded outright.
                     placeholder.original_description = txn_data.description
+                    if placeholder.amount != txn_data.amount or converted is not None:
+                        # Matched under a tolerance, or the bank said what the
+                        # charge cost in the primary currency: the row now
+                        # stands for what was actually charged, not for what
+                        # the bill expected.
+                        placeholder.amount = txn_data.amount
+                        await _stamp_synced_primary_amount(
+                            session, user_id, placeholder, converted
+                        )
                     if placeholder.category_id is None:
                         placeholder.category_id = preview.category_id or category_id
                     if txn_data.payee and not placeholder.payee:
@@ -2727,18 +2771,9 @@ async def sync_connection(
                 if transaction.category_id is None:
                     transaction.category_id = category_id
 
-                # Prefer bank-provided conversion for international transactions
-                acct_currency = acc_data.currency or user_currency
-                if (
-                    txn_data.amount_in_account_currency is not None
-                    and txn_data.amount
-                    and acct_currency == user_currency
-                    and txn_data.currency != acct_currency
-                ):
-                    transaction.amount_primary = txn_data.amount_in_account_currency
-                    transaction.fx_rate_used = txn_data.amount_in_account_currency / txn_data.amount
-                else:
-                    await stamp_primary_amount(session, user_id, transaction)
+                await _stamp_synced_primary_amount(
+                    session, user_id, transaction, converted
+                )
 
             # Reconcile the opening balance after any new transactions land so
             # SUM(all txs) keeps matching account.balance from the provider.
