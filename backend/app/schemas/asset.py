@@ -229,9 +229,28 @@ class PortfolioPerformancePoint(BaseModel):
     benchmarks: dict[str, float] = Field(default_factory=dict)
 
 
+PerformanceMethod = Literal["twr", "mwr"]
+
+
+class MoneyWeightedSeriesRead(BaseModel):
+    """What a money-weighted return between any two points is solved from.
+
+    Each list is aligned with ``PortfolioPerformanceRead.points``: the value
+    held at that point and the net money put in on that date (negative when
+    taken out). Benchmarks are keyed like ``points[].benchmarks`` and hold
+    the shadow portfolio that received the same money.
+    """
+
+    values: list[float] = Field(default_factory=list)
+    flows: list[float] = Field(default_factory=list)
+    benchmark_values: dict[str, list[float]] = Field(default_factory=dict)
+    benchmark_flows: dict[str, list[float]] = Field(default_factory=dict)
+
+
 class PortfolioPerformanceRead(BaseModel):
     benchmark_symbol: Optional[str] = None
     benchmark_provider: Optional[str] = None
+    method: PerformanceMethod = "twr"
     period: str
     start_date: _date
     end_date: _date
@@ -240,6 +259,8 @@ class PortfolioPerformanceRead(BaseModel):
     excess_return: Optional[float] = None
     benchmarks: list[BenchmarkPerformanceRead] = Field(default_factory=list)
     points: list[PortfolioPerformancePoint] = Field(default_factory=list)
+    # Only for the money-weighted method, so the client can measure a range.
+    money_weighted: Optional[MoneyWeightedSeriesRead] = None
 
 
 class AssetValueCreate(BaseModel):
