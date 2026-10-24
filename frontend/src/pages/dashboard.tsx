@@ -42,6 +42,7 @@ import { CheckCircle2, CalendarIcon, Clock, Paperclip, Target, ArrowUpDown, Help
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ICON_MAP } from '@/lib/category-icons'
 import { PageHeader } from '@/components/page-header'
+import { PageRefreshButton } from '@/components/page-refresh-button'
 import { CategoryIcon } from '@/components/category-icon'
 import { AccountIcon } from '@/components/account-icon'
 import { TransactionDrillDown, type DrillDownFilter } from '@/components/transaction-drill-down'
@@ -187,7 +188,7 @@ export default function DashboardPage() {
   // silently falling back to "all accounts".
   const noAccounts = activeAccountIds !== null && activeAccountIds.length === 0
 
-  const { data: summary, isLoading: summaryLoading } = useQuery({
+  const { data: summary, isLoading: summaryLoading, isFetching: summaryFetching } = useQuery({
     queryKey: ['dashboard', 'summary', selectedMonth, activeAccountIds, activeWalletIds],
     queryFn: () => dashboard.summary(monthParam, undefined, acctIds, walletIds),
   })
@@ -660,6 +661,10 @@ export default function DashboardPage() {
               className="h-8 w-8 flex items-center justify-center rounded-lg border border-border bg-card text-muted-foreground hover:border-border hover:text-foreground transition-all text-base"
               onClick={() => handleMonthChange(shiftMonth(selectedMonth, 1))}
             >&#8250;</button>
+            <PageRefreshButton
+              onRefresh={() => queryClient.refetchQueries({ type: 'active' })}
+              refreshing={summaryFetching}
+            />
           </div>
         }
       />
@@ -855,9 +860,18 @@ export default function DashboardPage() {
             {summaryLoading || accountsUnavailable ? (
               <Skeleton className="h-6 w-24" />
             ) : (
-              <p className={`text-lg sm:text-xl font-bold tabular-nums ${totalBalance < 0 ? 'text-rose-500' : 'text-foreground'}`}>
-                {mask(formatCurrency(totalBalance, primaryCurrency, locale))}
-              </p>
+              <>
+                <p className={`text-lg sm:text-xl font-bold tabular-nums ${totalBalance < 0 ? 'text-rose-500' : 'text-foreground'}`}>
+                  {mask(formatCurrency(totalBalance, primaryCurrency, locale))}
+                </p>
+                {/* Visible text, not a hover title, so touch users can read it. */}
+                {summary?.fx_fallback === true && (
+                  <p className="mt-1 flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+                    <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                    <span>{t('transactions.fxFallbackBanner')}</span>
+                  </p>
+                )}
+              </>
             )}
           </div>
 

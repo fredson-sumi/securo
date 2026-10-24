@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -930,6 +930,110 @@ async def test_sync_connection_partial_user_action_warning_marks_connection_erro
         select(Transaction).where(Transaction.external_id == "partial-tx-1")
     )).scalar_one()
     assert synced_tx.description == "GROCERY"
+
+
+@pytest.mark.asyncio
+async def test_sync_connection_simplefin_partial_expiry_keeps_healthy_account(
+    session: AsyncSession, test_user, test_workspace,
+):
+    """One expired sub-connection must not block the rest (issue #1077).
+
+    The real SimpleFinProvider runs against a fake bridge where one of the
+    two accounts needs reauthorization. The healthy account's new
+    transaction must still land, and the connection comes back flagged
+    (status "error") so the UI offers retry plus bridge reauthorization,
+    instead of the sync aborting and rolling the healthy account back.
+    """
+    import httpx
+
+    from app.providers.simplefin import SimpleFinProvider
+    from tests.test_providers_simplefin import _patched_client
+
+    conn = await _make_connection(session, test_user.id, "Bridge Bank")
+    conn.provider = "simplefin"
+    conn.credentials = {"access_url": "https://u:p@bridge.example/simplefin"}
+    previous_sync = datetime.now(timezone.utc) - timedelta(days=5)
+    conn.last_sync_at = previous_sync
+    await session.commit()
+    await session.refresh(conn)
+
+    now_epoch = int(datetime.now(timezone.utc).timestamp())
+    day = 86400
+    conn_a = {
+        "conn_id": "C-A", "name": "Bank A", "org_id": "A",
+        "org_url": "https://bank-a.example",
+    }
+    conn_b = {
+        "conn_id": "C-B", "name": "Bank B", "org_id": "B",
+        "org_url": "https://bank-b.example",
+    }
+    auth_err = {"code": "con.auth", "msg": "Authentication required", "conn_id": "C-B"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        account = request.url.params.get("account")
+        if account == "acc-healthy":
+            return httpx.Response(200, json={
+                "errlist": [],
+                "connections": [conn_a],
+                "accounts": [{
+                    "id": "acc-healthy", "name": "Checking", "currency": "USD",
+                    "balance": "100.00",
+                    "transactions": [{
+                        "id": "tx-healthy-new", "posted": now_epoch - day,
+                        "transacted_at": now_epoch - day,
+                        "amount": "-42.10", "description": "STORE PURCHASE",
+                    }],
+                }],
+            })
+        if account == "acc-expired":
+            # The bridge's documented partial-expiry shape for the per-account
+            # query: no data, con.auth in the errlist.
+            return httpx.Response(200, json={
+                "errlist": [auth_err],
+                "connections": [conn_b],
+                "accounts": [],
+            })
+        # Whole-connection query: both accounts still listed, B flagged stale.
+        return httpx.Response(200, json={
+            "errlist": [auth_err],
+            "connections": [conn_a, conn_b],
+            "accounts": [
+                {
+                    "id": "acc-healthy", "name": "Checking", "currency": "USD",
+                    "balance": "100.00", "balance-date": now_epoch - day,
+                },
+                {
+                    "id": "acc-expired", "name": "Savings", "currency": "USD",
+                    "balance": "50.00", "balance-date": now_epoch - 10 * day,
+                },
+            ],
+        })
+
+    provider = SimpleFinProvider()
+    with patch("app.services.connection_service.get_provider", return_value=provider), \
+         patch("app.services.connection_service.detect_transfer_pairs", new_callable=AsyncMock), \
+         patch("app.services.connection_service.stamp_primary_amount", new_callable=AsyncMock), \
+         patch("app.services.connection_service.apply_rules_to_transaction", new_callable=AsyncMock), \
+         _patched_client(handler):
+        result_conn, merged, outcome = await sync_connection(
+            session, conn.id, test_workspace.id, test_user.id
+        )
+
+    # The sync itself succeeds (no 409, no rollback of the healthy account)...
+    assert outcome == "refreshed"
+    healthy_tx = (await session.execute(
+        select(Transaction).where(Transaction.external_id == "tx-healthy-new")
+    )).scalar_one()
+    assert healthy_tx.description == "STORE PURCHASE"
+    # ...and the connection is flagged for reauthorization instead of the
+    # whole link being dead.
+    assert result_conn.status == "error"
+    assert any(w.get("code") == "con.auth" for w in provider.action_required_warnings)
+    # The expired account fetched nothing, so the sync cursor stays put: once
+    # the bank is reauthorized, the next sync still covers the missed days.
+    kept = result_conn.last_sync_at
+    assert kept is not None
+    assert kept.replace(tzinfo=timezone.utc) == previous_sync
 
 
 @pytest.mark.asyncio
@@ -1935,6 +2039,70 @@ async def test_phantom_cleanup_keeps_a_same_day_repeat_the_provider_still_return
         mock_provider.get_transactions = AsyncMock(return_value=[])
         await sync_connection(session, conn.id, test_workspace.id, test_user.id)
         assert await synced_ids() == {"pix-to-nubank", "pix-to-mercado-pago"}
+
+
+@pytest.mark.asyncio
+async def test_phantom_cleanup_skips_an_account_whose_fetch_was_cut_short(
+    session: AsyncSession, test_user, test_workspace
+):
+    """An authorization failure on a later window chunk leaves a partial
+    live set: the paired sibling came back, the unpaired row from the
+    failed chunk did not. That is not evidence of a re-keyed twin, so the
+    cleanup must leave the account alone for this sync (#1077)."""
+    conn = await _make_connection(session, test_user.id, "Partial Bank")
+
+    account = Account(
+        id=uuid.uuid4(), user_id=test_user.id, workspace_id=test_workspace.id,
+        connection_id=conn.id, external_id="partial-acc-1", name="Checking",
+        type="checking", balance=Decimal("50000"), currency="BRL",
+    )
+    session.add(account)
+    await session.flush()
+    account_id = account.id
+
+    payment_day = date.today()
+    for external_id, pair in (("returned-paired", uuid.uuid4()), ("in-failed-chunk", None)):
+        session.add(Transaction(
+            id=uuid.uuid4(), user_id=test_user.id, workspace_id=test_workspace.id,
+            account_id=account_id, external_id=external_id,
+            description="Pix enviado Own Name", amount=Decimal("10000.00"),
+            date=payment_day, type="debit", status="posted", source="sync",
+            currency="BRL", transfer_pair_id=pair,
+            created_at=datetime.now(timezone.utc),
+        ))
+    await session.commit()
+
+    mock_provider = AsyncMock()
+    mock_provider.refresh_credentials = AsyncMock(return_value={"token": "t"})
+    mock_provider.action_required_warnings = [{"code": "credentials_invalid"}]
+    mock_provider.incomplete_account_ids = {"partial-acc-1"}
+    mock_provider.get_accounts = AsyncMock(return_value=[
+        AccountData(
+            external_id="partial-acc-1", name="Checking", type="checking",
+            balance=Decimal("50000"), currency="BRL",
+        ),
+    ])
+    mock_provider.get_transactions = AsyncMock(return_value=[
+        TransactionData(
+            external_id="returned-paired", description="Pix enviado Own Name",
+            amount=Decimal("10000.00"), date=payment_day, type="debit",
+            currency="BRL", status="posted",
+        ),
+    ])
+
+    with patch("app.services.connection_service.get_provider", return_value=mock_provider), \
+         patch("app.services.connection_service.detect_transfer_pairs", new_callable=AsyncMock), \
+         patch("app.services.connection_service.stamp_primary_amount", new_callable=AsyncMock), \
+         patch("app.services.connection_service.apply_rules_to_transaction", new_callable=AsyncMock):
+        await sync_connection(session, conn.id, test_workspace.id, test_user.id)
+
+    rows = (await session.execute(
+        select(Transaction.external_id).where(
+            Transaction.account_id == account_id,
+            Transaction.source == "sync",
+        )
+    )).scalars().all()
+    assert set(rows) == {"returned-paired", "in-failed-chunk"}
 
 
 @pytest.mark.asyncio
