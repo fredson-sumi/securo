@@ -169,6 +169,14 @@ export function MobileTransactionRow({
               <span className="text-xs text-muted-foreground truncate">
                 {getAccountName(account)}
               </span>
+              {tx.transfer_counterpart && (
+                <>
+                  <ArrowLeftRight className="h-3 w-3 text-blue-600 shrink-0" aria-hidden="true" />
+                  <span className="text-xs text-muted-foreground truncate">
+                    {tx.transfer_counterpart.account_name}
+                  </span>
+                </>
+              )}
             </div>
           )
         )}

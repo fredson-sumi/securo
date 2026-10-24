@@ -3,7 +3,17 @@ from datetime import date as _Date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import ColumnElement, Select, case, delete, func, select, or_, update
+from sqlalchemy import (
+    ColumnElement,
+    Select,
+    and_,
+    case,
+    delete,
+    func,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import contains_eager
 
@@ -141,11 +151,35 @@ def _balance_subqueries(today: _Date):
         .subquery()
     )
 
-    return balance_sq, prev_balance_sq, future_charges_sq
+    # Subquery: the open bill of each card on a shared credit line (earliest
+    # due_date on or after today; one row per account via rn = 1). Every card
+    # on one consolidated line repeats the contract-wide balance, so the
+    # sidebar shows the card's own bill instead (issue #684).
+    open_bill_sq = (
+        select(
+            CreditCardBill.account_id,
+            CreditCardBill.total_amount,
+            func.row_number()
+            .over(
+                partition_by=CreditCardBill.account_id,
+                order_by=CreditCardBill.due_date,
+            )
+            .label("rn"),
+        )
+        .join(Account, CreditCardBill.account_id == Account.id)
+        .where(
+            Account.type == "credit_card",
+            Account.shared_balance_group.isnot(None),
+            CreditCardBill.due_date >= today,
+        )
+        .subquery()
+    )
+
+    return balance_sq, prev_balance_sq, future_charges_sq, open_bill_sq
 
 
 def _accounts_with_balances_query(
-    workspace_id: uuid.UUID, balance_sq, prev_balance_sq, future_charges_sq
+    workspace_id: uuid.UUID, balance_sq, prev_balance_sq, future_charges_sq, open_bill_sq
 ):
     return (
         select(
@@ -154,11 +188,26 @@ def _accounts_with_balances_query(
             func.coalesce(balance_sq.c.current_balance, 0).label("current_balance"),
             func.coalesce(prev_balance_sq.c.previous_balance, 0).label("previous_balance"),
             func.coalesce(future_charges_sq.c.future_charges, 0).label("future_charges"),
+            open_bill_sq.c.total_amount.label("open_bill_total"),
+            # The opening balance's date, so the edit form can show it and
+            # leave it alone (issue #1204).
+            select(func.min(Transaction.date))
+            .where(
+                Transaction.account_id == Account.id,
+                Transaction.source == "opening_balance",
+            )
+            .correlate(Account)
+            .scalar_subquery()
+            .label("balance_date"),
         )
         .outerjoin(BankConnection)
         .outerjoin(balance_sq, Account.id == balance_sq.c.account_id)
         .outerjoin(prev_balance_sq, Account.id == prev_balance_sq.c.account_id)
         .outerjoin(future_charges_sq, Account.id == future_charges_sq.c.account_id)
+        .outerjoin(
+            open_bill_sq,
+            and_(Account.id == open_bill_sq.c.account_id, open_bill_sq.c.rn == 1),
+        )
         .where(
             or_(
                 Account.workspace_id == workspace_id,
@@ -176,9 +225,23 @@ async def get_accounts(session: AsyncSession, workspace_id: uuid.UUID, include_c
     result = await session.execute(query)
     return [
             serialize_account(
-                acc, current_balance, previous_balance, connection, future_charges=future_charges
+                acc,
+                current_balance,
+                previous_balance,
+                connection,
+                future_charges=future_charges,
+                open_bill_total=open_bill_total,
+                balance_date=balance_date,
             )
-            for acc, connection, current_balance, previous_balance, future_charges in result.all()
+            for (
+                acc,
+                connection,
+                current_balance,
+                previous_balance,
+                future_charges,
+                open_bill_total,
+                balance_date,
+            ) in result.all()
         ]
 
 
@@ -192,9 +255,15 @@ async def get_account_with_balances(
     row = (await session.execute(query)).first()
     if row is None:
         return None
-    acc, connection, current_balance, previous_balance, future_charges = row
+    acc, connection, current_balance, previous_balance, future_charges, open_bill_total, balance_date = row
     return serialize_account(
-        acc, current_balance, previous_balance, connection, future_charges=future_charges
+        acc,
+        current_balance,
+        previous_balance,
+        connection,
+        future_charges=future_charges,
+        open_bill_total=open_bill_total,
+        balance_date=balance_date,
     )
 
 
@@ -227,6 +296,8 @@ def serialize_account(
     connection: Optional[BankConnection] = None,
     *,
     future_charges: Optional[Decimal] = None,
+    open_bill_total: Optional[Decimal] = None,
+    balance_date: Optional[_Date] = None,
 ) -> dict:
     # Connected CC: provider stores positive for debt → negate.
     # Manual accounts: transaction math already gives correct sign.
@@ -259,8 +330,13 @@ def serialize_account(
         "card_brand": acc.card_brand,
         "card_level": acc.card_level,
         "shared_balance_group": acc.shared_balance_group,
+        # The card's own open bill, when it sits on a shared credit line.
+        # Null for every other account and for shared cards without one.
+        "open_bill_total": float(open_bill_total) if open_bill_total is not None else None,
+        "open_bill_total_primary": None,
         "institution_name": institution_name,
         "institution_logo_url": institution_logo_url,
+        "balance_date": balance_date,
         "available_credit": None,
         "next_close_date": None,
         "next_due_date": None,
@@ -933,6 +1009,69 @@ async def get_account_summary(
         counts_on_bill() if account.type == "credit_card" else counts_as_pnl()
     )
 
+    # Intermediate payments into the card (the credit leg of a paired
+    # transfer) reduce the bill total, but only by what is left after
+    # they settle the debt that was already outstanding when the window
+    # opened. Banks apply repayments oldest first: paying last cycle's
+    # bill inside this window must not read as this cycle's charges
+    # disappearing, while anything paid beyond that older debt can only
+    # settle this cycle's charges, so the bank bills the net (issue #668).
+    prior_debt = 0.0
+    paid_now = 0.0
+    paid_later = 0.0
+    if account.type == "credit_card":
+        prior_result = await session.execute(
+            select(func.coalesce(func.sum(
+                case(
+                    (Transaction.type == "credit", effective_amount),
+                    else_=-effective_amount,
+                )
+            ), 0)).where(
+                Transaction.account_id == account_id,
+                bucket_date < date_from,
+                # Rows linked to the selected bill belong to it whatever
+                # their date (see `_scope`), so they are not older debt.
+                *([] if bill_id is None else [or_(
+                    Transaction.bill_id.is_(None), Transaction.bill_id != bill_id,
+                )]),
+                Transaction.is_ignored == False,
+                or_(
+                    Transaction.category_id.is_(None),
+                    Transaction.category_id.not_in(
+                        select(Category.id).where(Category.is_ignored == True)
+                    ),
+                ),
+            )
+        )
+        prior_debt = max(0.0, -float(prior_result.scalar() or 0))
+        paired_payment = and_(
+            counts_on_bill(net_payments=True),
+            Transaction.type == "credit",
+            Transaction.transfer_pair_id.is_not(None),
+            Transaction.source != "opening_balance",
+        )
+        paid_now_result = await session.execute(
+            _scope(select(func.coalesce(func.sum(func.abs(effective_amount)), 0)).where(
+                Transaction.account_id == account_id,
+                bucket_date <= today,
+                Transaction.status == "posted",
+                paired_payment,
+            ))
+        )
+        paid_now = float(paid_now_result.scalar() or 0)
+        paid_later_result = await session.execute(
+            _scope(select(func.coalesce(func.sum(func.abs(effective_amount)), 0)).where(
+                Transaction.account_id == account_id,
+                or_(Transaction.status == "pending", bucket_date > today),
+                paired_payment,
+            ))
+        )
+        paid_later = float(paid_later_result.scalar() or 0)
+    # What the posted payments leave over after the older debt, and what
+    # the pending/future ones add on top of that.
+    netted_now = max(0.0, paid_now - prior_debt)
+    netted_total = max(0.0, paid_now + paid_later - prior_debt)
+
     # Income = SUM of credit transactions in window (excluding opening_balance
     # and paired transfers).
     income_result = await session.execute(
@@ -949,11 +1088,12 @@ async def get_account_summary(
 
     # Expenses = SUM of debit transactions in window (same exclusions).
     # For credit-card accounts, NET refund credits against debits so the
-    # cycle's "Total da fatura" matches the bank's bill (refunds reduce the
-    # invoice amount). Paired transfers are dropped by `transfer_pair_id`;
-    # unpaired card payments are dropped by the credit-side `treat_as_transfer`
-    # exclusion in `counts_on_bill` (see its docstring for why that's
-    # asymmetric with the debit side).
+    # cycle's "Total da fatura" matches the bank's bill (refunds reduce
+    # the invoice amount). Paired transfers are dropped by `transfer_pair_id`
+    # and netted separately below (see `netted_now`); unpaired card payments
+    # are dropped by the credit-side `treat_as_transfer` exclusion in
+    # `counts_on_bill` (see its docstring for why that's asymmetric with the
+    # debit side).
     if account.type == "credit_card":
         signed_for_bill = case(
             (Transaction.type == "credit", -func.abs(effective_amount)),
@@ -978,7 +1118,7 @@ async def get_account_summary(
                 summary_filter,
             ))
         )
-    monthly_expenses = float(expenses_result.scalar())
+    monthly_expenses = float(expenses_result.scalar()) - netted_now
 
     # Forecast values use the same cycle/date scope as the actual totals, but
     # include every pending row and every row bucketed after today. The current
@@ -1018,7 +1158,9 @@ async def get_account_summary(
                 summary_filter,
             ))
         )
-    forecast_expenses = float(forecast_expense_result.scalar() or 0)
+    forecast_expenses = float(forecast_expense_result.scalar() or 0) - (
+        netted_total - netted_now
+    )
 
     opening_balance = (
         await get_period_opening_balance(session, account, date_from)

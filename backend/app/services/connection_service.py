@@ -1953,6 +1953,7 @@ async def _cleanup_phantom_duplicates(
     session: AsyncSession,
     connection_id: uuid.UUID,
     live_external_ids: Optional[dict[uuid.UUID, set[str]]] = None,
+    skip_account_ids: Optional[set[uuid.UUID]] = None,
 ) -> set[uuid.UUID]:
     """Delete synced transactions that are phantom duplicates.
 
@@ -1976,13 +1977,21 @@ async def _cleanup_phantom_duplicates(
     provider's fetch window, so this sync has no evidence about them, and they
     were already checked while they were in it.
 
+    ``skip_account_ids`` are accounts whose fetch this sync was cut short
+    (e.g. an authorization failure mid-window). Their live set is partial,
+    so a row from the missing part would look like a re-keyed twin of a
+    returned sibling; they are left alone until a complete fetch.
+
     Returns the ids of the accounts that lost a row, so the caller can
     reconcile their opening balances against what is left.
     """
     accounts_result = await session.execute(
         select(Account.id).where(Account.connection_id == connection_id)
     )
-    account_ids = [row[0] for row in accounts_result.all()]
+    account_ids = [
+        row[0] for row in accounts_result.all()
+        if row[0] not in (skip_account_ids or set())
+    ]
     if not account_ids:
         return set()
 
@@ -2368,6 +2377,7 @@ async def sync_connection(
         new_tx_ids: list[uuid.UUID] = []
         merged_count = 0
         live_txn_external_ids: dict[uuid.UUID, set[str]] = {}
+        incomplete_fetch_account_ids: set[uuid.UUID] = set()
         accounts_data = await provider.get_accounts(credentials)
         incoming_external_ids = {acc.external_id for acc in accounts_data}
         incoming_institution_external_ids = frozenset(
@@ -2526,6 +2536,9 @@ async def sync_connection(
             live_txn_external_ids[account.id] = {
                 txn.external_id for txn in transactions_data
             }
+            incomplete = getattr(provider, "incomplete_account_ids", None)
+            if isinstance(incomplete, set) and acc_data.external_id in incomplete:
+                incomplete_fetch_account_ids.add(account.id)
             if not import_pending:
                 transactions_data = [t for t in transactions_data if t.status != "pending"]
 
@@ -2806,7 +2819,8 @@ async def sync_connection(
         # same payment with different ids. Once transfer detection has paired
         # the real one, the orphan twin gets removed here.
         touched_account_ids = await _cleanup_phantom_duplicates(
-            session, connection.id, live_txn_external_ids
+            session, connection.id, live_txn_external_ids,
+            skip_account_ids=incomplete_fetch_account_ids,
         )
 
         # The opening balances above were reconciled with the phantoms still
@@ -2849,7 +2863,13 @@ async def sync_connection(
         for orphan in orphaned_institutions.scalars().all():
             await session.delete(orphan)
 
-        connection.last_sync_at = datetime.now(timezone.utc)
+        # An account whose fetch was cut short (issue #1077) is missing the
+        # rest of the window. The next fetch starts from last_sync_at, so
+        # moving it forward would leave that gap behind for good once the
+        # user reauthorizes; keep it until every account fetched in full.
+        # The healthy accounts just re-read a longer window, deduplicated.
+        if not incomplete_fetch_account_ids:
+            connection.last_sync_at = datetime.now(timezone.utc)
         action_required_warnings = getattr(provider, "action_required_warnings", None)
         if isinstance(action_required_warnings, list) and action_required_warnings:
             logger.warning(

@@ -8,6 +8,7 @@ from sqlalchemy import CursorResult, case, delete, select, func, or_, not_, upda
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.app_clock import app_today
 from app.models.transaction import Transaction
 from app.models.transaction_attachment import TransactionAttachment
 from app.models.account import Account
@@ -1901,6 +1902,54 @@ async def bulk_add_to_group(
 
     await session.commit()
     return {"updated": updated, "skipped": skipped}
+
+
+async def post_transaction_today(
+    session: AsyncSession,
+    transaction_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+) -> Optional[Transaction]:
+    """Mark a transaction as posted and stamp it with today's calendar date.
+
+    The one-click "it cleared today" action for a pending entry: confirms the
+    status and moves the purchase date to the workspace's current day, the same
+    as saving the edit dialog with status "posted" and date "today". The
+    effective date and the FX restamp follow the date change, and a transfer
+    pair leg carries the same change to its partner, so the row ends up exactly
+    where the manual edit would have left it. No other field is touched, and the
+    transaction must belong to the given workspace.
+    """
+    transaction = await get_transaction(session, transaction_id, workspace_id)
+    if not transaction:
+        return None
+
+    today = app_today()
+    transaction.status = "posted"
+    transaction.date = today
+
+    account = await session.get(Account, transaction.account_id)
+    apply_effective_date(transaction, account)
+    await stamp_primary_amount(session, transaction.user_id, transaction)
+
+    if transaction.transfer_pair_id:
+        paired_result = await session.execute(
+            select(Transaction).where(
+                Transaction.workspace_id == workspace_id,
+                Transaction.transfer_pair_id == transaction.transfer_pair_id,
+                Transaction.id != transaction.id,
+            )
+        )
+        paired = paired_result.scalar_one_or_none()
+        if paired:
+            paired.status = "posted"
+            paired.date = today
+            paired_account = await session.get(Account, paired.account_id)
+            apply_effective_date(paired, paired_account)
+            await stamp_primary_amount(session, paired.user_id, paired)
+
+    await session.commit()
+    await session.refresh(transaction)
+    return transaction
 
 
 async def toggle_ignore_transaction(

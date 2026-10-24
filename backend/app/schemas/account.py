@@ -61,6 +61,8 @@ class AccountRead(AccountBase):
     institution_logo_url: Optional[str] = None
     current_balance: float = 0.0
     previous_balance: Optional[float] = None
+    # Date of the opening-balance transaction; null when there is none.
+    balance_date: Optional[date] = None
     balance_primary: Optional[float] = None
     # True when the account is in a foreign currency and no real FX rate is
     # available, so balance_primary is left unset rather than a 1:1 guess.
@@ -75,6 +77,14 @@ class AccountRead(AccountBase):
     card_brand: Optional[str] = None
     card_level: Optional[str] = None
     shared_balance_group: Optional[str] = None
+    # Open bill of a card on a shared credit line (earliest due_date on or
+    # after today), in the account's currency. The sidebar leads with it so
+    # every card stops repeating the contract-wide balance. Null when the
+    # card has no such bill, and for all accounts outside a shared line.
+    open_bill_total: Optional[float] = None
+    # Same bill converted to the user's primary currency. None when the
+    # account is already in it or no real FX rate is available.
+    open_bill_total_primary: Optional[float] = None
     is_closed: bool = False
     closed_at: Optional[datetime] = None
 
