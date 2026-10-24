@@ -1137,14 +1137,20 @@ async def get_projected_transactions(
 
     # Pre-fetch categories for all recurring templates that have one
     cat_ids = {r.category_id for r in recurring_list if r.category_id}
-    cat_map: dict[uuid.UUID, tuple[str, str, str]] = {}
+    cat_map: dict[uuid.UUID, tuple[str, str, str, bool]] = {}
     if cat_ids:
         cat_result = await session.execute(
-            select(Category.id, Category.name, Category.icon, Category.color)
+            select(
+                Category.id,
+                Category.name,
+                Category.icon,
+                Category.color,
+                Category.treat_as_transfer,
+            )
             .where(Category.id.in_(cat_ids))
         )
         for row in cat_result.all():
-            cat_map[row[0]] = (row[1], row[2], row[3])
+            cat_map[row[0]] = (row[1], row[2], row[3], bool(row[4]))
 
     projections: list[ProjectedTransaction] = []
     for rec in recurring_list:
@@ -1157,7 +1163,11 @@ async def get_projected_transactions(
             intended_day=rec.day_of_month or rec.start_date.day,
             weekend_adjustment=rec.weekend_adjustment,
         )
-        cat_name, cat_icon, cat_color = cat_map.get(rec.category_id, (None, None, None)) if rec.category_id else (None, None, None)
+        cat_name, cat_icon, cat_color, cat_is_transfer = (
+            cat_map.get(rec.category_id, (None, None, None, False))
+            if rec.category_id
+            else (None, None, None, False)
+        )
 
         # Convert to primary currency at the latest real rate. A missing rate
         # stays unknown; virtual projections must never manufacture a 1:1
@@ -1188,6 +1198,7 @@ async def get_projected_transactions(
                 category_name=cat_name,
                 category_icon=cat_icon,
                 category_color=cat_color,
+                category_treat_as_transfer=cat_is_transfer,
             ))
 
     return projections

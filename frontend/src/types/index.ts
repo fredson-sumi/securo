@@ -683,6 +683,7 @@ export interface ProjectedTransaction {
   category_name: string | null
   category_icon: string | null
   category_color: string | null
+  category_treat_as_transfer: boolean
 }
 
 export interface TransactionCalendarItem {

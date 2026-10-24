@@ -76,3 +76,4 @@ class ProjectedTransaction(BaseModel):
     category_name: Optional[str]
     category_icon: Optional[str]
     category_color: Optional[str] = None
+    category_treat_as_transfer: bool = False
