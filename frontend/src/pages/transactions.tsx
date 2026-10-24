@@ -80,6 +80,7 @@ import { useWorkspace } from '@/contexts/workspace-context'
 import { useCollectionFilter } from '@/contexts/collection-filter-context'
 import { formatCurrency } from '@/lib/format'
 import { shouldShowPendingBadge } from '@/lib/transaction-status'
+import { isTransferTransaction } from '@/lib/transaction-transfer'
 
 type TransactionUpdatePayload = TransactionEditPayload & {
   apply_to_transfer_pair?: boolean
@@ -1173,7 +1174,7 @@ export default function TransactionsPage() {
                     : t('transactions.invoiceBadgeNoNumber')}
               </Link>
             ))}
-            {!!tx.transfer_pair_id && (
+            {isTransferTransaction(tx) && (
               <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-blue-600 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded-full">
                 <ArrowLeftRight className="h-3 w-3" />
                 {t('transactions.transfer')}
