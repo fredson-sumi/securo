@@ -34,6 +34,7 @@ import {
   MAX_PERFORMANCE_BENCHMARKS,
   type PerformanceView,
   isSameSelection,
+  moneyWeightedReturn,
   newViewId,
   periodReturn,
   readBenchmarkSelections,
@@ -47,7 +48,13 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import type { Asset, AssetGroup, BenchmarkMatch, PortfolioPerformancePeriod } from '@/types'
+import type {
+  Asset,
+  AssetGroup,
+  BenchmarkMatch,
+  PerformanceMethod,
+  PortfolioPerformancePeriod,
+} from '@/types'
 
 const PERIODS: PortfolioPerformancePeriod[] = ['3m', '6m', 'ytd', '1y', '3y', '5y']
 const PERIOD_LABELS: Record<PortfolioPerformancePeriod, string> = {
@@ -58,6 +65,7 @@ const PERIOD_LABELS: Record<PortfolioPerformancePeriod, string> = {
   '3y': '3Y',
   '5y': '5Y',
 }
+const METHODS: PerformanceMethod[] = ['twr', 'mwr']
 const BENCHMARK_COLORS = ['#6366F1', '#F59E0B', '#06B6D4', '#8B5CF6', '#F43F5E']
 const BENCHMARK_DASHES = ['6 3', '2 3', '8 3 2 3', '10 4', '4 4']
 
@@ -113,6 +121,7 @@ export function PortfolioPerformance({
   // Reopen on whatever was selected last time in this workspace.
   const [lastSelection] = useState(() => readLastSelection(workspaceId))
   const [period, setPeriod] = useState<PortfolioPerformancePeriod>(lastSelection?.period ?? '1y')
+  const [method, setMethod] = useState<PerformanceMethod>(lastSelection?.method ?? 'twr')
   const [scope, setScope] = useState<'all' | 'custom'>(lastSelection?.scope ?? 'all')
   const [scopeOpen, setScopeOpen] = useState(false)
   const [selectedWalletIds, setSelectedWalletIds] = useState<string[]>(
@@ -135,8 +144,9 @@ export function PortfolioPerformance({
       walletIds: selectedWalletIds,
       assetIds: selectedAssetIds,
       period,
+      method,
     })
-  }, [workspaceId, scope, selectedWalletIds, selectedAssetIds, period])
+  }, [workspaceId, scope, selectedWalletIds, selectedAssetIds, period, method])
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 400)
@@ -180,12 +190,20 @@ export function PortfolioPerformance({
       workspaceId,
       selected.map(benchmarkKey),
       period,
+      method,
       sortedGroupIds,
       requestWalletIds,
       requestAssetIds,
     ],
     queryFn: () =>
-      assets.performance(selected, period, sortedGroupIds, requestWalletIds, requestAssetIds),
+      assets.performance(
+        selected,
+        period,
+        sortedGroupIds,
+        requestWalletIds,
+        requestAssetIds,
+        method,
+      ),
     enabled: !emptyCollection && !emptyCustomScope,
     // A failed benchmark source is transient: retry it on the next visit
     // instead of serving the cached error for the usual five minutes.
@@ -419,17 +437,32 @@ export function PortfolioPerformance({
     const startIndex = indexByDate.get(range.start)
     const endIndex = indexByDate.get(range.end)
     if (startIndex === undefined || endIndex === undefined || startIndex === endIndex) return null
-    const from = chartData[Math.min(startIndex, endIndex)]
-    const to = chartData[Math.max(startIndex, endIndex)]
+    const first = Math.min(startIndex, endIndex)
+    const last = Math.max(startIndex, endIndex)
+    const from = chartData[first]
+    const to = chartData[last]
     const between = (key: string) =>
       from[key] == null || to[key] == null ? null : periodReturn(Number(from[key]), Number(to[key]))
+    // A money-weighted range depends on the money moved inside it, so it is
+    // solved again rather than derived from the cumulative line.
+    const series = data?.method === 'mwr' ? data.money_weighted : null
+    const dates = chartData.map((row) => String(row.date))
+    const solved = (values?: number[], flows?: number[]) =>
+      values && flows ? moneyWeightedReturn(dates, values, flows, first, last) : null
     return {
       startDate: String(from.date),
       endDate: String(to.date),
-      portfolio: between('portfolio'),
-      benchmarks: selected.map((_, index) => between(`benchmark_${index}`)),
+      portfolio: series ? solved(series.values, series.flows) : between('portfolio'),
+      benchmarks: selected.map((benchmark, index) =>
+        series
+          ? solved(
+              series.benchmark_values[benchmarkKey(benchmark)],
+              series.benchmark_flows[benchmarkKey(benchmark)],
+            )
+          : between(`benchmark_${index}`),
+      ),
     }
-  }, [range, chartData, indexByDate, selected])
+  }, [range, chartData, indexByDate, selected, data])
   // Within about six months, month labels alone repeat; show the day too.
   const shortSpan =
     chartData.length > 1 &&
@@ -682,6 +715,35 @@ export function PortfolioPerformance({
               </div>
             </PopoverContent>
           </Popover>
+        </div>
+
+        <div className="min-w-0">
+          <p id={`${chartId}-method`} className="mb-1.5 text-xs font-medium text-muted-foreground">
+            {t('assets.performanceMethod')}
+          </p>
+          <div
+            role="group"
+            aria-labelledby={`${chartId}-method`}
+            className="grid h-10 grid-cols-2 gap-1 rounded-lg bg-muted/60 p-1"
+          >
+            {METHODS.map((item) => (
+              <button
+                key={item}
+                type="button"
+                aria-pressed={method === item}
+                onClick={() => setMethod(item)}
+                className={`rounded-md px-3 text-xs font-semibold whitespace-nowrap transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                  method === item
+                    ? 'bg-card text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:bg-card/60 hover:text-foreground'
+                }`}
+              >
+                {item === 'twr'
+                  ? t('assets.performanceMethodTimeWeighted')
+                  : t('assets.performanceMethodMoneyWeighted')}
+              </button>
+            ))}
+          </div>
         </div>
 
         {benchmarksEnabled && (
@@ -1223,7 +1285,9 @@ export function PortfolioPerformance({
           />
         </summary>
         <p className="max-w-3xl pb-4 text-xs leading-relaxed text-muted-foreground">
-          {t('assets.performanceCashFlowHint')}
+          {method === 'mwr'
+            ? t('assets.performanceMoneyWeightedHint')
+            : t('assets.performanceCashFlowHint')}
         </p>
         <p className="max-w-3xl pb-4 text-xs leading-relaxed text-muted-foreground">
           {t('assets.performanceDashboardHint')}

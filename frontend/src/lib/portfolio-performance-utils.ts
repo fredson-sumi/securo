@@ -1,4 +1,9 @@
-import type { BenchmarkMatch, PortfolioPerformancePeriod, UserPreferences } from '../types'
+import type {
+  BenchmarkMatch,
+  PerformanceMethod,
+  PortfolioPerformancePeriod,
+  UserPreferences,
+} from '../types'
 
 const STORAGE_PREFIX = 'securo.performanceBenchmark.'
 export const MAX_PERFORMANCE_BENCHMARKS = 5
@@ -78,6 +83,7 @@ export interface PerformanceSelection {
   walletIds: string[]
   assetIds: string[]
   period: PortfolioPerformancePeriod
+  method: PerformanceMethod
 }
 
 /** A named set of wallets and holdings, saved to the user's preferences. */
@@ -105,6 +111,7 @@ export function readLastSelection(workspaceId: string): PerformanceSelection | n
       period: PERIODS.includes(parsed.period as PortfolioPerformancePeriod)
         ? (parsed.period as PortfolioPerformancePeriod)
         : '1y',
+      method: parsed.method === 'mwr' ? 'mwr' : 'twr',
     }
   } catch {
     return null
@@ -194,4 +201,74 @@ export function periodReturn(startPercent: number, endPercent: number): number |
   const startGrowth = 1 + startPercent / 100
   if (!(startGrowth > 0)) return null
   return ((1 + endPercent / 100) / startGrowth - 1) * 100
+}
+
+const DAY_MS = 86_400_000
+const MAX_LOG_GROWTH = 45
+const CASH_EPSILON = 1e-9
+
+/**
+ * Money-weighted return (IRR) between two points, as a cumulative percentage.
+ * Mirrors the server's `money_weighted_return`: what was held at `start`,
+ * plus the money put in after it (`flows`, negative when taken out), grows
+ * into what is held at `end` at a single rate, compounded over the time
+ * money was actually invested. Unlike a time-weighted series, the return
+ * of a range can't be derived from the cumulative values, so it is solved
+ * again from the values and flows.
+ */
+export function moneyWeightedReturn(
+  dates: string[],
+  values: number[],
+  flows: number[],
+  start: number,
+  end: number,
+): number | null {
+  const time = (index: number) => new Date(`${dates[index]}T00:00:00Z`).getTime() / DAY_MS
+  const cash: [number, number][] = [[time(start), -Math.max(values[start] ?? 0, 0)]]
+  for (let index = start + 1; index <= end; index += 1) cash.push([time(index), -(flows[index] ?? 0)])
+  cash.push([time(end), Math.max(values[end] ?? 0, 0)])
+  const moved = cash.filter(([, amount]) => Math.abs(amount) > CASH_EPSILON)
+  if (!moved.length) return 0
+  const paid = moved.reduce((sum, [, amount]) => (amount < 0 ? sum - amount : sum), 0)
+  const received = moved.reduce((sum, [, amount]) => (amount > 0 ? sum + amount : sum), 0)
+  if (paid <= 0) return null
+  if (received <= 0) return -100
+  const first = Math.min(...moved.map(([when]) => when))
+  const span = Math.max(...moved.map(([when]) => when)) - first
+  if (span === 0) return (received / paid - 1) * 100
+  const timed = moved.map(([when, amount]) => [(when - first) / span, amount] as const)
+  const npv = (x: number) => {
+    let total = 0
+    let slope = 0
+    for (const [elapsed, amount] of timed) {
+      const term = amount * Math.exp(-x * elapsed)
+      total += term
+      slope -= elapsed * term
+    }
+    return [total, slope] as const
+  }
+  let low = -MAX_LOG_GROWTH
+  let high = MAX_LOG_GROWTH
+  const [lowValue] = npv(low)
+  const [highValue] = npv(high)
+  if (lowValue === 0) return (Math.exp(low) - 1) * 100
+  if (lowValue > 0 === highValue > 0) return null
+  const lowPositive = lowValue > 0
+  const tolerance = 1e-12 * (paid + received)
+  let x = 0
+  for (let iteration = 0; iteration < 200; iteration += 1) {
+    const [value, slope] = npv(x)
+    if (Math.abs(value) <= tolerance) break
+    if (value > 0 === lowPositive) low = x
+    else high = x
+    // Newton's step, falling back to bisection when it leaves the bracket.
+    const step = slope ? x - value / slope : Number.NaN
+    const next = step > low && step < high ? step : (low + high) / 2
+    if (Math.abs(next - x) < 1e-13) {
+      x = next
+      break
+    }
+    x = next
+  }
+  return (Math.exp(x) - 1) * 100
 }

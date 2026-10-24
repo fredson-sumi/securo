@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   benchmarkStorageKey,
   isSameSelection,
+  moneyWeightedReturn,
   newViewId,
   periodReturn,
   readBenchmarkSelection,
@@ -79,12 +80,14 @@ describe('performance selection memory', () => {
       walletIds: ['w1'],
       assetIds: ['a1'],
       period: '6m',
+      method: 'mwr',
     })
     expect(readLastSelection('ws-1')).toEqual({
       scope: 'custom',
       walletIds: ['w1'],
       assetIds: ['a1'],
       period: '6m',
+      method: 'mwr',
     })
     expect(readLastSelection('ws-2')).toBeNull()
   })
@@ -99,6 +102,7 @@ describe('performance selection memory', () => {
       walletIds: ['w1'],
       assetIds: [],
       period: '1y',
+      method: 'twr',
     })
   })
 })
@@ -153,5 +157,41 @@ describe('periodReturn', () => {
 
   it('has no defined return after a total loss', () => {
     expect(periodReturn(-100, 5)).toBeNull()
+  })
+})
+
+describe('moneyWeightedReturn', () => {
+  const day = (offset: number) => new Date(Date.UTC(2025, 0, 1 + offset)).toISOString().slice(0, 10)
+
+  it('is the plain change when no money moves', () => {
+    expect(moneyWeightedReturn([day(0), day(365)], [1000, 1100], [0, 0], 0, 1)).toBeCloseTo(10, 6)
+  })
+
+  it('matches the server on a dip bought with new money', () => {
+    // Same case as the backend: -100 - 100 g^-0.5 + 300 g^-1 = 0.
+    const dates = [day(0), day(15), day(30)]
+    const expected = (36 / (1 + Math.sqrt(13)) ** 2 - 1) * 100
+    expect(moneyWeightedReturn(dates, [100, 150, 300], [0, 100, 0], 0, 2)).toBeCloseTo(expected, 6)
+    // A range that starts after the top-up is just that range's change.
+    expect(moneyWeightedReturn(dates, [100, 150, 300], [0, 100, 0], 1, 2)).toBeCloseTo(100, 6)
+  })
+
+  it('ignores the days before the first buy and after selling everything', () => {
+    const dates = [day(0), day(181), day(365), day(400)]
+    expect(moneyWeightedReturn(dates, [0, 1000, 1100, 1100], [0, 1000, 0, 0], 0, 2)).toBeCloseTo(
+      10,
+      6,
+    )
+    expect(moneyWeightedReturn(dates, [1000, 1100, 0, 0], [0, 0, -1100, 0], 0, 3)).toBeCloseTo(
+      moneyWeightedReturn(dates, [1000, 1100, 0, 0], [0, 0, -1100, 0], 0, 2)!,
+      10,
+    )
+  })
+
+  it('handles nothing invested, a total loss and money that was never put in', () => {
+    const dates = [day(0), day(1), day(10)]
+    expect(moneyWeightedReturn(dates, [0, 0, 0], [0, 0, 0], 0, 2)).toBe(0)
+    expect(moneyWeightedReturn(dates, [0, 500, 0], [0, 500, 0], 0, 2)).toBe(-100)
+    expect(moneyWeightedReturn(dates, [0, 0, 0], [0, -500, 0], 0, 2)).toBeNull()
   })
 })

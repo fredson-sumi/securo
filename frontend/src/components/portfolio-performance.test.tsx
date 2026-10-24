@@ -48,6 +48,7 @@ const benchmarks: BenchmarkMatch[] = [
 const performanceData: PerformanceData = {
   benchmark_symbol: '^GSPC',
   benchmark_provider: 'yahoo',
+  method: 'twr',
   period: '1y',
   start_date: '2026-01-07',
   end_date: '2026-09-29',
@@ -181,6 +182,7 @@ describe('PortfolioPerformance', () => {
       walletIds: [],
       assetIds: [],
       period: '1y',
+      method: 'twr',
     })
     const { user } = renderPerformance()
 
@@ -195,26 +197,26 @@ describe('PortfolioPerformance', () => {
     })
     await user.click(apple)
     await waitFor(() =>
-      expect(assets.performance).toHaveBeenLastCalledWith([], '1y', null, [], ['apple']),
+      expect(assets.performance).toHaveBeenLastCalledWith([], '1y', null, [], ['apple'], 'twr'),
     )
 
     await user.click(brokerage)
     expect(apple).toBeChecked()
     expect(apple).toBeDisabled()
     await waitFor(() =>
-      expect(assets.performance).toHaveBeenLastCalledWith([], '1y', null, ['brokerage'], []),
+      expect(assets.performance).toHaveBeenLastCalledWith([], '1y', null, ['brokerage'], [], 'twr'),
     )
     expect(within(scope).getByText('1 selected')).toBeInTheDocument()
 
     await user.click(within(scope).getByRole('checkbox', { name: 'Cash reserve' }))
     await waitFor(() =>
-      expect(assets.performance).toHaveBeenLastCalledWith([], '1y', null, ['brokerage'], ['cash']),
+      expect(assets.performance).toHaveBeenLastCalledWith([], '1y', null, ['brokerage'], ['cash'], 'twr'),
     )
     await user.click(brokerage)
     expect(apple).not.toBeChecked()
     expect(apple).toBeEnabled()
     await waitFor(() =>
-      expect(assets.performance).toHaveBeenLastCalledWith([], '1y', null, [], ['cash']),
+      expect(assets.performance).toHaveBeenLastCalledWith([], '1y', null, [], ['cash'], 'twr'),
     )
   })
 
@@ -224,6 +226,7 @@ describe('PortfolioPerformance', () => {
       walletIds: [],
       assetIds: [],
       period: '1y',
+      method: 'twr',
     })
     const sold = {
       id: 'tesla',
@@ -238,7 +241,7 @@ describe('PortfolioPerformance', () => {
     const scope = screen.getByRole('dialog', { name: 'Portfolio scope' })
     await user.click(within(scope).getByRole('checkbox', { name: 'Tesla · TSLA · Sold' }))
     await waitFor(() =>
-      expect(assets.performance).toHaveBeenLastCalledWith([], '1y', null, [], ['tesla']),
+      expect(assets.performance).toHaveBeenLastCalledWith([], '1y', null, [], ['tesla'], 'twr'),
     )
   })
 
@@ -262,11 +265,40 @@ describe('PortfolioPerformance', () => {
         ['wallet-a', 'wallet-z'],
         undefined,
         undefined,
+        'twr',
       ),
     )
     expect(period).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('button', { name: '1Y' })).toHaveAttribute('aria-pressed', 'false')
     expect(readLastSelection(workspaceId)?.period).toBe('3m')
+  })
+
+  it('switches to the money-weighted return and remembers it', async () => {
+    const { user } = renderPerformance()
+    await screen.findByText('+12.50%')
+    const methods = screen.getByRole('group', { name: 'Return method' })
+    expect(within(methods).getByRole('button', { name: 'Time-weighted' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+
+    await user.click(within(methods).getByRole('button', { name: 'Money-weighted' }))
+    await waitFor(() =>
+      expect(assets.performance).toHaveBeenLastCalledWith(
+        [],
+        '1y',
+        null,
+        undefined,
+        undefined,
+        'mwr',
+      ),
+    )
+    expect(within(methods).getByRole('button', { name: 'Money-weighted' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(readLastSelection(workspaceId)?.method).toBe('mwr')
+    expect(screen.getByText(/Money-weighted gross return \(IRR\)/)).toBeInTheDocument()
   })
 
   it('supports keyboard benchmark selection and removal at the five-benchmark limit', async () => {
@@ -302,6 +334,7 @@ describe('PortfolioPerformance', () => {
         null,
         undefined,
         undefined,
+        'twr',
       ),
     )
 
