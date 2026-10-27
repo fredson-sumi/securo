@@ -8,4 +8,18 @@ An in-app Enable Banking private key overrides `ENABLE_BANKING_PRIVATE_KEY_FILE`
 
 Provider availability and credentials are read for each new operation, including worker jobs. An operation already running may finish with its earlier credentials. Configuration status confirms that required fields are present; it does not verify them with the provider.
 
-Migration `097` changes `app_settings.value` to `TEXT` so an encrypted PEM key fits. The migration does not copy environment credentials into the database.
+Migration `099` changes `app_settings.value` to `TEXT` so an encrypted PEM key fits. The migration does not copy environment credentials into the database.
+
+Rolling back past `099` shrinks `app_settings.value` to 2000 characters again, and the downgrade fails while a longer value is stored; an encrypted Enable Banking private key usually is. Older versions also read providers only from environment variables and return any `app_settings` row to administrators, so saved credentials should not stay behind. Before rolling back:
+
+1. Set the environment variables for every provider configured in the app (for the private key, `ENABLE_BANKING_PRIVATE_KEY_FILE`).
+2. Remove each saved value in **Admin Settings → Providers**. The status then shows the environment as the source.
+3. Check that nothing is left, by key only, so no credential is printed:
+
+   ```sql
+   SELECT key FROM app_settings
+   WHERE key IN ('openexchangerates_app_id', 'pluggy_client_id', 'pluggy_client_secret',
+                 'enable_banking_app_id', 'enable_banking_private_key', 'simplefin_enabled');
+   ```
+
+4. Run `alembic downgrade 098`, then deploy the older version.
